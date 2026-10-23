@@ -88,7 +88,7 @@ CASES = [
     (M.v_gh_part, "../../x",                True,  "owner 穿越"),
 
     # ---- 值拼进 R 双引号字面量 ----
-    (M.r_lit, "{root}/R/library",           False, "路径正常"),
+    (M.r_lit, "D:/app/R/library",            False, "路径正常"),
     (M.r_lit, "D:\\app\\R\\library",        False, "反斜杠路径正常（会转正斜杠）"),
     (M.r_lit, 'x"; system("calc")',         True,  "路径含引号"),
     (M.r_lit, "x\ny",                       True,  "路径含换行"),

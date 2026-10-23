@@ -48,6 +48,20 @@ python scripts/check_envs.py                      # 期望 11 PASS
 python install/bootstrap.py --root ~/sci-fig --only figkit
 ```
 
+### 已经有 R / Python？不会重复装
+
+默认 `--r-mode auto` 先找机器上已有的 `Rscript`（`RSCRIPT` / `R_HOME` / PATH / 常见目录），
+找到就**复用**——不下载安装器、不装第二套 R，只把包装进 `<root>/R/library` 这个独立库。
+
+```bash
+# 没找到时会提示：
+#   没检测到已有 R，将安装一套。若你其实已经装了 R，加 --r-mode reuse --r-path <Rscript> 复用即可。
+python install/bootstrap.py --root X --r-mode reuse --r-path "C:/Program Files/R/R-4.6.1/bin/Rscript.exe"
+```
+
+Python 只用来建 venv（不下载解释器）；conda 用你现有的、建一个 prefix，不动 base 环境。
+细节见 [`install/README.md`](install/README.md)。
+
 ## 装 mod
 
 ```bash

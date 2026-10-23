@@ -26,6 +26,8 @@ except Exception:
     pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.environ.get("SCI_FIG_ROOT") or (
+    "D:/app" if os.name == "nt" else os.path.expanduser("~/.sci-fig"))
 
 
 def _load_mod():
@@ -65,15 +67,18 @@ DEFAULTS = {
     "fonts": {"cjk": "C:/Windows/Fonts/simhei.ttf", "cjk_family": "SimHei"},
 }
 
+DEFAULTS = {k: (v.replace("{root}", ROOT) if isinstance(v, str) else v)
+            for k, v in DEFAULTS.items()}
+
 CONFIG_PATHS = [
     os.environ.get("SCI_FIG_ENVS"),
     # skill 自带的安装记录：换机器时跟着 skill 一起搬，优先级高于机器本地默认。
     # （installer 会同时写 <root>/envs/envs.json 与这里）
     os.path.join(os.path.dirname(HERE), "envs.json"),
-    "{root}/envs/envs.json",
+    f"{ROOT}/envs/envs.json",
 ]
 
-PROBE_DIR = os.environ.get("SCI_FIG_PROBE_DIR") or "{root}/envs/_probe"
+PROBE_DIR = os.environ.get("SCI_FIG_PROBE_DIR") or f"{ROOT}/envs/_probe"
 
 
 def load_config():
@@ -92,12 +97,17 @@ def load_config():
     return cfg, src
 
 
-def run(cmd, timeout=180):
+def run(cmd, timeout=180, env_extra=None):
     """跑子进程，返回 (returncode, stdout+stderr)。绝不抛异常。"""
+    env = dict(os.environ)
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    if env_extra:
+        env.update(env_extra)
     try:
         p = subprocess.run(
             cmd, capture_output=True, timeout=timeout,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8", errors="replace", env=env,
         )
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
@@ -178,7 +188,8 @@ def _rscript(cfg, expr, timeout=240):
                "-p", cfg["r_prefix"], "Rscript.exe", "-e", expr]
     else:
         cmd = [rs, "-e", expr]
-    return run(cmd, timeout=timeout)
+    # 复用用户的 R 时包在独立库里，必须显式告诉 R 去哪找
+    return run(cmd, timeout=timeout, env_extra={"R_LIBS": cfg.get("r_lib", "")})
 
 
 def probe_r_core(cfg):
@@ -239,24 +250,34 @@ def probe_r_render_cjk(cfg):
 
 
 def probe_r_lib_isolation(cfg):
-    """确认 R 只从 {root}/R 下取包，没有渗到用户目录。
+    """确认独立库排在用户库前面 —— 否则同名包可能被用户那份抢先加载。
 
-    这是"不污染系统"的守门探针：若 R 从 %LOCALAPPDATA%/R/win-library
-    加载包，说明有人绕过 lib= 装了包，正是本项目要防的情况。
+    复用用户的 R 时，用户库仍然在 .libPaths() 里（那是他自己的 R），
+    只要我们的独立库排在它前面就没有遮蔽风险。
     """
     if not os.path.isfile(cfg["rscript"]):
         return None, "R 缺失，跳过", None
-    rc, out = run([cfg["rscript"], "-e", "cat(.libPaths(), sep='|')"])
+    rc, out = run([cfg["rscript"], "-e", "cat(.libPaths(), sep='|')"],
+                  env_extra={"R_LIBS": cfg.get("r_lib", "")})
     if rc != 0:
         return None, first_line(out), None
     paths = [p.strip() for p in first_line(out, 400).split("|") if p.strip()]
-    leaked = [p for p in paths
-              if "AppData" in p or p.replace("\\", "/").upper().startswith("C:/")]
-    if leaked:
-        return False, f"R 库渗出到用户目录：{leaked}", \
-            "用 lib=.libPaths()[1] 重装；或删除 AppData 下的 R 库"
+
+    def norm(p):
+        return p.replace("\\", "/").lower()
+
+    lib = norm(cfg.get("r_lib", ""))
+    idx = next((i for i, p in enumerate(paths) if lib and norm(p).startswith(lib)), None)
+    risky = [
+        p for i, p in enumerate(paths)
+        if ("appdata" in norm(p) or "/win-library" in norm(p) or "/r/" in norm(p) + "/")
+        and (idx is None or i < idx)
+    ]
+    if risky:
+        return False, f"用户库排在独立库前面：{risky}", \
+            f"设 R_LIBS={cfg['r_lib']}，或清空 R_LIBS_USER"
     first = paths[0] if paths else "?"
-    return True, f"库路径隔离正常（{first}）", None
+    return True, f"独立库优先（{first}）", None
 
 
 def probe_omicverse(cfg):
@@ -304,7 +325,7 @@ def probe_mods(cfg):
     选中它，然后在 Step 5 才炸。探针走 mod.py verify 的子进程，
     绝不在本进程 import 被诊断对象（和本文件其它探针同一条纪律）。
     """
-    state_p = os.path.join(cfg.get("mods_vendor") or "{root}/envs/_mods",
+    state_p = os.path.join(cfg.get("mods_vendor") or f"{ROOT}/envs/_mods",
                            "_state.json")
     if not os.path.isfile(state_p):
         return None, "没有已装载的 mod", None
@@ -340,16 +361,16 @@ PROBES = [
 def discover(cfg):
     """探测真实路径并打印可粘贴的 JSON。"""
     found = dict(cfg)
-    for c in ("{root}/R/bin/Rscript.exe", "{root}/R/bin/x64/Rscript.exe",
-              "{root}/R/Lib/R/bin/Rscript.exe", "{root}/R/lib/R/bin/Rscript.exe"):
+    for c in (f"{ROOT}/R/bin/Rscript.exe", f"{ROOT}/R/bin/x64/Rscript.exe",
+              f"{ROOT}/R/Lib/R/bin/Rscript.exe", f"{ROOT}/R/lib/R/bin/Rscript.exe"):
         if os.path.isfile(c):
             found["rscript"] = c
             break
-    for c in ("{root}/R/library", "{root}/R/Lib/R/library", "{root}/R/lib/R/library"):
+    for c in (f"{ROOT}/R/library", f"{ROOT}/R/Lib/R/library", f"{ROOT}/R/lib/R/library"):
         if os.path.isdir(c):
             found["r_lib"] = c
             break
-    for c in ("{root}/envs/figkit/Scripts/python.exe", "{root}/envs/figkit/python.exe"):
+    for c in (f"{ROOT}/envs/figkit/Scripts/python.exe", f"{ROOT}/envs/figkit/python.exe"):
         if os.path.isfile(c):
             found["figkit_python"] = c
             found["figkit_mode"] = "venv" if "Scripts" in c else "conda"

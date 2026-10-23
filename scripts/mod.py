@@ -47,6 +47,9 @@ except Exception:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(SCRIPT_DIR)
 MODS_DIR = os.path.join(SKILL_DIR, "mods")
+
+ROOT = os.environ.get("SCI_FIG_ROOT") or (
+    "D:/app" if os.name == "nt" else os.path.expanduser("~/.sci-fig"))
 ROUTES_MD = os.path.join(SKILL_DIR, "references", "routing-mods.md")
 
 UA = "sci-figure-kit-mod-loader"
@@ -63,11 +66,14 @@ DEFAULTS = {
     "mods_tmp": "{root}/envs/_mods_tmp",
 }
 
+DEFAULTS = {k: (v.replace("{root}", ROOT) if isinstance(v, str) else v)
+            for k, v in DEFAULTS.items()}
+
 CONFIG_PATHS = [
     os.environ.get("SCI_FIG_ENVS"),
     # 与 check_envs.py 同一套解析顺序：skill 自带 > 机器默认
     os.path.join(SKILL_DIR, "envs.json"),
-    "{root}/envs/envs.json",
+    f"{ROOT}/envs/envs.json",
 ]
 
 # ---------------------------------------------------------------- 闭集
@@ -313,15 +319,21 @@ def _child_env():
     return env
 
 
-def run(cmd, timeout=900, cwd=None):
+def run(cmd, timeout=900, cwd=None, env_extra=None):
     """跑子进程，返回 (returncode, stdout+stderr)。绝不抛异常。
 
     cwd 是给工作台用的：绘图脚本里写的是 data.csv / out.png 这类相对路径，
     让子进程在项目目录里跑，脚本就既能被工作台跑、也能自己 cd 过去手跑。
+
+    env_extra 用来给 R 传 R_LIBS —— 复用用户的 R 时，包装在独立库里，
+    不设这个环境变量 R 就找不到。
     """
+    env = _child_env()
+    if env_extra:
+        env.update(env_extra)
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=timeout,
-                           encoding="utf-8", errors="replace", env=_child_env(),
+                           encoding="utf-8", errors="replace", env=env,
                            cwd=cwd)
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
@@ -347,7 +359,8 @@ def r_script(cfg, code, timeout=600, cwd=None):
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(code.rstrip("\n") + "\n")
     try:
-        return run([cfg["rscript"], tmp], timeout=timeout, cwd=cwd)
+        return run([cfg["rscript"], tmp], timeout=timeout, cwd=cwd,
+                   env_extra={"R_LIBS": cfg["r_lib"]})
     finally:
         try:
             os.remove(tmp)

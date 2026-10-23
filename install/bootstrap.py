@@ -100,12 +100,51 @@ def install_figkit(cfg: dict, dry: bool) -> bool:
     return True
 
 
+def find_existing_r() -> str | None:
+    """找机器上已有的 Rscript —— 有就复用，绝不重复下载一套 R。"""
+    env_path = os.environ.get("RSCRIPT")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+    rhome = os.environ.get("R_HOME")
+    if rhome:
+        for cand in (os.path.join(rhome, "bin", "Rscript.exe"),
+                     os.path.join(rhome, "bin", "Rscript")):
+            if os.path.isfile(cand):
+                return cand
+    found = shutil.which("Rscript")
+    if found:
+        return found
+    import glob
+    if IS_WIN:
+        pats = [
+            r"C:/Program Files/R/R-*/bin/Rscript.exe",
+            r"C:/Program Files/R/R-*/bin/x64/Rscript.exe",
+            os.path.expanduser(r"~/AppData/Local/Programs/R/R-*/bin/Rscript.exe"),
+        ]
+    else:
+        pats = ["/opt/R/*/bin/Rscript",
+                "/usr/local/lib/R/bin/Rscript",
+                "/Library/Frameworks/R.framework/Resources/bin/Rscript"]
+    hits = []
+    for pat in pats:
+        hits.extend(glob.glob(pat))
+    return sorted(hits)[-1] if hits else None
+
+
 def install_r(cfg: dict, dry: bool) -> bool:
-    say("\n---------- [R] 官方 CRAN R ----------")
-    if not IS_WIN:
-        say("非 Windows：请用系统包管理器装 R（如 apt/brew），然后重跑本脚本只装 R 包。")
+    mode = cfg.get("r_mode", "install")
+    say("\n---------- [R] ----------")
+    if mode == "reuse":
+        if not os.path.isfile(cfg["rscript"]):
+            say(f"!! reuse 模式但找不到 {cfg['rscript']}")
+            return False
+        say(f"复用已有 R：{cfg['rscript']}（不下载、不安装第二套 R）")
+        say(f"包只装到独立库：{cfg['r_lib']}（不写你原有的 library）")
+    elif not IS_WIN:
+        say("非 Windows：请用系统包管理器装 R（如 apt/brew），"
+            "然后用 --r-mode reuse --r-path $(which Rscript) 复用它。")
         return False
-    if os.path.isfile(cfg["rscript"]):
+    elif os.path.isfile(cfg["rscript"]):
         say(f"已存在：{cfg['rscript']}")
     else:
         exe = os.path.join(cfg["root"], "envs", "_R-installer.exe")
@@ -125,6 +164,7 @@ def install_r(cfg: dict, dry: bool) -> bool:
     rcode = f'''
 lib <- "{cfg['r_lib']}"
 dir.create(lib, recursive = TRUE, showWarnings = FALSE)
+.libPaths(c(lib, .libPaths()))     # 让 requireNamespace 也看得到独立库
 repos <- c(CRAN = "https://cloud.r-project.org")
 core <- c("dplyr","tidyr","stringr","purrr","tibble","forcats","magrittr",
           "rlang","data.table","reshape2","matrixStats",
@@ -137,7 +177,7 @@ install.packages(core, lib = lib, repos = repos, dependencies = NA, type = "bina
 install.packages(c("Seurat","SeuratObject","SCpubr"), lib = lib, repos = repos,
                  dependencies = NA, type = "binary")
 BiocManager::install("ComplexHeatmap", lib = lib, ask = FALSE, update = FALSE)
-missing <- core[!vapply(core, function(p) requireNamespace(p, quietly = TRUE), logical(1))]
+missing <- core[!vapply(core, function(p) requireNamespace(p, lib.loc = lib, quietly = TRUE), logical(1))]
 cat("缺失:", if (length(missing)) paste(missing, collapse = " ") else "无", "\\n")
 '''
     fd, path = tempfile.mkstemp(suffix=".R", prefix="sci_fig_pkg_")
@@ -158,7 +198,8 @@ def find_conda() -> str | None:
     found = shutil.which("conda")
     if found:
         return found
-    for cand in ("{root}/ana/Scripts/conda.exe", "C:/ProgramData/miniconda3/Scripts/conda.exe",
+    for cand in (os.path.join(os.environ.get("SCI_FIG_ROOT") or "D:/app", "ana", "Scripts", "conda.exe"),
+                 "C:/ProgramData/miniconda3/Scripts/conda.exe",
                  "C:/ProgramData/anaconda3/Scripts/conda.exe",
                  os.path.expanduser("~/miniconda3/Scripts/conda.exe"),
                  os.path.expanduser("~/anaconda3/Scripts/conda.exe")):
@@ -198,8 +239,9 @@ def write_config(cfg: dict) -> None:
         "r_prefix": cfg["r"],
         "rscript": cfg["rscript"],
         "r_lib": cfg["r_lib"],
+        "r_mode": cfg.get("r_mode", "install"),
         "r_needs_activation": False,
-        "r_install": "official-cran",
+        "r_install": "official-cran" if cfg.get("r_mode") == "install" else "reused",
         "mods_vendor": cfg["vendor"],
         "fonts": {"cjk": "C:/Windows/Fonts/simhei.ttf", "cjk_family": "SimHei"},
     }
@@ -218,10 +260,27 @@ def main() -> int:
                     help="安装根目录（默认 $SCI_FIG_ROOT 或 D:/app）")
     ap.add_argument("--only", choices=["figkit", "r", "omicverse"], default=None,
                     help="只装其中一套（可重复跑补齐）")
+    ap.add_argument("--r-mode", choices=["auto", "reuse", "install"], default="auto",
+                    help="auto=检测到已有 R 就复用；reuse=必须复用；install=总是装一套新的")
+    ap.add_argument("--r-path", default=None, help="已有 R 的 Rscript 路径（配合 --r-mode reuse）")
     ap.add_argument("--dry-run", action="store_true", help="只打印将要做的事")
     args = ap.parse_args()
 
     cfg = layout(args.root)
+    cfg["r_mode"] = "install"
+    if args.r_mode in ("auto", "reuse"):
+        found = args.r_path or find_existing_r()
+        if found and os.path.isfile(found):
+            cfg["rscript"] = found
+            cfg["r"] = os.path.dirname(os.path.dirname(found))
+            cfg["r_lib"] = os.path.join(args.root, "R", "library").replace("\\", "/")
+            cfg["r_mode"] = "reuse"
+        elif args.r_mode == "reuse":
+            say("--r-mode reuse 但没找到 Rscript；用 --r-path 指定路径")
+            return 2
+        else:
+            say("没检测到已有 R，将安装一套。若你其实已经装了 R，"
+                "加 --r-mode reuse --r-path <Rscript 路径> 复用即可。")
     say("=" * 60)
     say(f"sci-figure-kit 安装  →  {cfg['root']}")
     say(f"skill: {SKILL}")

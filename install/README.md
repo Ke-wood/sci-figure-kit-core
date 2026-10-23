@@ -1,85 +1,78 @@
-# 装环境：给一台干净的 Windows
+# 装环境
 
-这个 skill 不自带 Python/R，也不要求装到固定盘符。**装到哪里由你在第一条命令里定**。
+这个 skill 不自带 Python/R，也不要求装到固定盘符。**装到哪里由你在第一条命令里定**，
+而且**能复用你已有的 R / Python / conda 时就不重复装**。
 
-## 前提
+## 一条命令
 
-| 依赖 | 说明 |
-|---|---|
-| Windows 10/11 x64 | 安装器按 Windows 写；非 Windows 见文末 |
-| Python ≥ 3.10 | 用来建 figkit 的 venv；`python --version` 能跑即可 |
-| 可选：Miniconda | 只有 `omicverse` 需要；没有就跳过这一套 |
-| 网络 | 首次装 R 与 Python 包要下载 |
-
-不需要管理员权限；不写系统 PATH；不碰你已有的全局 Python。
-
-## 三步
-
-```powershell
-# 1 解压后进入 skill 目录（含 SKILL.md 的那层）
-cd <解压目录>\01-skill本体
-
-# 2 选一个你自己的位置装（默认 D:/app）
-python install\bootstrap.py --root E:\tools\sci-fig
-
-# 3 装完会自跑体检，看到 11 PASS / 0 FAIL 就好了
+```bash
+python install/bootstrap.py --root <你选的位置>      # 默认 D:/app（POSIX 是 ~/.sci-fig）
 ```
 
-`--root` 就是**所有东西的落点**：
+它做三件事：建 figkit 的 venv、准备 R、建 omicverse 环境。三套互相独立，
+哪套失败只影响哪套，可以 `--only figkit|r|omicverse` 单独补。
 
-```
-<root>\envs\figkit       Python venv（cnsplots / SciencePlots / cmcrameri / marsilea）
-<root>\R                 官方 CRAN R 4.6.1 + ggplot2 / ComplexHeatmap / Seurat / SCpubr
-<root>\envs\omicverse    conda prefix + omicverse
-<root>\envs\_mods        mod 拉下来的第三方代码
-<root>\envs\envs.json    机器本地注册表
-```
+## 已经有 R 怎么办（不会重复装）
 
-同时会在 **skill 目录**写一份 `envs.json`。所以 skill 本体搬到哪台机器都认这套路径，
-不用设环境变量。
+默认 `--r-mode auto`：**先找机器上已有的 Rscript**（`RSCRIPT` / `R_HOME` / PATH /
+常见安装目录），找到就复用它 —— 不下载安装器、不装第二套 R。
+只是把包装进一个**独立库**（`<root>/R/library`），不动你原来的 library。
 
-## 只装一部分
-
-三套彼此独立，缺哪套补哪套：
-
-```powershell
-python install\bootstrap.py --root E:\tools\sci-fig --only figkit
-python install\bootstrap.py --root E:\tools\sci-fig --only r
-python install\bootstrap.py --root E:\tools\sci-fig --only omicverse
-python install\bootstrap.py --root E:\tools\sci-fig --dry-run    # 只看要做什么
+```bash
+# 它找到了，就会这样打印
+#   复用已有 R：C:/Program Files/R/R-4.6.1/bin/Rscript.exe（不下载、不安装第二套 R）
+#   包只装到独立库：<root>/R/library（不写你原有的 library）
 ```
 
-只有 figkit 也能用：所有 matplotlib 系绘图与富集都能跑，只是用不了 R 与单细胞流程。
+显式指定或强制：
 
-## 装完把 skill 放进 Claude / DSH
-
-```powershell
-# Claude Code（技能目录）
-Copy-Item -Recurse . "$env:USERPROFILE\.claude\skills\sci-figure-kit"
-
-# 或 DSH（技能目录，热加载）
-Copy-Item -Recurse . "$env:USERPROFILE\.dsh\skills\sci-figure-kit"
+```bash
+python install/bootstrap.py --root X --r-mode reuse --r-path "C:/Program Files/R/R-4.6.1/bin/Rscript.exe"
+python install/bootstrap.py --root X --r-mode install    # 我就想要一套独立的
 ```
 
-（如果解压目录已经在技能目录下，跳过这步。）
+复用的实现方式：所有 R 调用都带 `R_LIBS=<root>/R/library`，于是 `.libPaths()` 里
+独立库排在用户库前面，同名包不会被你个人装的那份抢先。
+
+## Python 与 conda
+
+- **Python**：只用来建 venv，不下载解释器（用你现有的 `python`）；
+- **conda**：用你现有的 conda 建一个 prefix，不覆盖 base 环境；
+- 没有 conda 就跳过 omicverse，`--only omicverse` 之后补。
+
+## 落点
+
+```
+<root>/envs/figkit       Python venv（cnsplots / SciencePlots / cmcrameri / marsilea）
+<root>/R                 官方 CRAN R + 包（复用模式下只有 library/ 是自己的）
+<root>/envs/omicverse    conda prefix + omicverse
+<root>/envs/_mods        mod 拉下来的第三方代码
+<root>/envs/envs.json    机器本地注册表
+```
+
+同时会在 **skill 目录**写一份 `envs.json`，所以 skill 搬到哪台机器都认这套路径。
+
+## 装完
+
+```bash
+python scripts/check_envs.py      # 期望 11 PASS / 0 FAIL
+```
+
+`R 库隔离` 那项检查的是「独立库是否排在用户库前面」，不是「你有没有装过 R」。
 
 ## 常见失败
 
-| 症状 | 原因 | 处理 |
-|---|---|---|
-| `找不到 Python ≥3.10` | 只有 Microsoft Store 的 python 别名 | 装官方 Python 并勾选 Add to PATH |
-| figkit 装到一半失败 | 网络或 wheel 缺失 | 重跑同一条命令（幂等） |
-| R 静默安装后仍没有 Rscript | 安装被拦或目录被占用 | 用 `--only r` 重跑；仍失败就手动装 R 4.6.x 到 `<root>\R` |
-| 没有 conda | 未装 Miniconda | 装完后 `--only omicverse` |
-| 体检里 `mods 一致性` FAIL | mod 声明了但没装 | `python scripts\mod.py install <id> --yes` |
+| 症状 | 处理 |
+|---|---|
+| `找不到 Python ≥3.10` | 装官方 Python 并勾选 Add to PATH |
+| R 复用后包找不到 | 确认 `envs.json` 里 `r_lib` 指向独立库；所有 R 调用都应带 `R_LIBS` |
+| 没有 conda | 跳过 omicverse，或装 Miniconda 后 `--only omicverse` |
+| 想彻底重来 | 删掉 `<root>` 与 skill 目录下的 `envs.json`，重跑 |
 
 ## 非 Windows
 
-`figkit` 部分在 Linux/macOS 上同样可用（venv 里是 `bin/python`）。
-R 与 omicverse 需要你用系统包管理器 / conda 自己装，然后跑：
+`figkit` 在 Linux/macOS 同样可用。R 用系统包管理器装好后：
 
 ```bash
-SCI_FIG_ENVS=<root>/envs/envs.json python scripts/check_envs.py
+python install/bootstrap.py --root ~/sci-fig --r-mode reuse --r-path "$(which Rscript)"
 ```
-
-把报错里缺的路径补进 `envs.json` 即可。R 的包安装部分见 `scripts/install_r.sh` 里的包清单。

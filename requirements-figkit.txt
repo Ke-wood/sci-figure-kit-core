@@ -1,0 +1,39 @@
+# sci-figure-kit —— figkit 环境依赖（AI 专用绘图环境，隔离 venv）
+#
+# 安装方式（必须用绝对路径的 venv python，禁止裸 pip）：
+#   D:/app/envs/figkit/Scripts/python.exe -m pip install -r requirements-figkit.txt
+#
+# 环境位置：D:/app/envs/figkit   （Python 3.14 venv，基于全局 3.14.5）
+# 全局 Python 3.14.5 不受任何影响，本文件内所有包只装进 venv。
+#
+# 本文件**不登记**任何 mod 的依赖。mod 装什么由 mods/<id>/mod.json 声明、
+# 由 scripts/mod.py 执行（见 mods/README.md）。
+# 注意：往 figkit 装 mod 有可能把 matplotlib/numpy 顶上去，进而弄坏 cnsplots
+# （它要求 matplotlib<3.11）。check_envs.py 的第 10 号探针就是这条线的哨兵，
+# mod.py install 结束时也会自动重跑一次体检。
+
+# ---- 基础绘图栈 ----
+# matplotlib 必须钉在 3.10.x：cnsplots 的依赖声明是 matplotlib<3.11,>=3.10。
+# 3.10.8 是满足该上限的最新 3.10.x，且已有 cp314 win_amd64 轮子（无需编译器）。
+# 本 venv 内永不允许 pip install -U matplotlib —— 升到 3.11 会直接弄坏 cnsplots。
+matplotlib==3.10.8
+numpy
+pandas
+
+# seaborn 的上限 <0.14 同样来自 cnsplots 自身依赖声明。
+seaborn>=0.13.2,<0.14
+
+# ---- 顶刊风格绘图库 ----
+# cnsplots: Cell/Nature/Science 版式，25+ 图型（火山图/森林图/ROC/热图/UpSet 等），
+#           多面板自动 A/B/C 标注，SVG 导出保留可编辑字体。
+cnsplots==0.7.0
+
+# SciencePlots: 纯 .mplstyle 配置集 + loader。提供 nature/ieee/journal 样式与
+#               配色循环（bright/vibrant/muted/retro/high-vis），含 cjk-sc 中文字体样式。
+SciencePlots==2.2.2
+
+# cmcrameri: Fabio Crameri 的感知均匀色图（batlow/roma/vik/oleron），色盲友好、印刷友好。
+cmcrameri==1.10
+
+# marsilea: 声明式多面板拼图（Complex heatmap / UpSet / Oncoprint / genome track）。
+marsilea==0.8.1

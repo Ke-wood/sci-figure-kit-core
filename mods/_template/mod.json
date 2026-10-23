@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "id": "换成-mod-的-id",
+  "name": "人类可读的名字",
+  "summary": "一句话说明它是干什么的（会出现在 mod.py list 里）",
+  "type": "见下表七选一",
+  "env": "figkit | omicverse | r | null",
+  "purpose": "plot | analysis | both —— plot 出图 / analysis 只产结果表与统计 / both 两样都干",
+  "source": {
+    "kind": "github",
+    "url": "https://github.com/owner/repo",
+    "owner": "owner",
+    "repo": "repo",
+    "default_branch": "main",
+    "ref": "tag / 分支 / commit SHA —— 必填，不钉版本 mod.py 会拒绝安装",
+    "sha": null,
+    "subdir": null
+  },
+  "install": {
+    "_说明": "按 type 填，只填名字，绝不填命令",
+    "pypkg 填": "spec（PyPI 包名+可选版本）+ dist + import_name",
+    "rpkg 填": "pkg（CRAN 包名）",
+    "其余填": "import_name"
+  },
+  "routes": [
+    {
+      "intent": "用户会怎么说出这个需求（触发词）",
+      "backend": "用哪个库",
+      "purpose": "可选，覆盖 mod 级 purpose；一条 route 一个用途",
+      "why": "为什么选它",
+      "fallback": "它挂了用什么顶（没有就写「无」）"
+    }
+  ],
+  "license": "MIT 等；认不出就写 none，并记住它不能随 zip 分发",
+  "docs": "docs.md",
+  "templates": [],
+  "requires_review": false,
+  "notes": "踩坑提醒、为什么不走某条路等等"
+}

@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Syntax check
+        run: python -m compileall -q scripts install
+
+      - name: Repository hygiene (no machine paths / local state)
+        run: python scripts/check_repo_hygiene.py
+
+      - name: Mod loader security cases (81)
+        run: python scripts/check_mod_guard.py
+
+      - name: Mod manifests load and list
+        run: python scripts/mod.py list
+
+      - name: CLI usage renders
+        run: python scripts/mod.py --help

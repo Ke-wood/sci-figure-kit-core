@@ -73,6 +73,8 @@ allowed-tools: [Bash, Read, Write, Glob, Grep]
 ## 纪律
 
 - 禁止裸 `pip install`；R 装包必须带 `lib="{root}/R/library"`；装 mod 只能经 `mod.py`。
+- 下载源统一走 `scripts/sources.py`（`--source tuna|ustc|aliyun`，或 `--pip-index` /
+  `--cran-mirror` 单项覆盖）；别在别处另写 URL。当前选择：`mod.py sources`。
 - **不猜 API**：函数名来自 `references/*-api.md` 或 `dir()` 实测。
 - 中文图必须显式设字体（SimHei）+ `axes.unicode_minus = False`。
 - 不要用 `cnsplots.savefig()`（毁中文），用 `fig.savefig()`。

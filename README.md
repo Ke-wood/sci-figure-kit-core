@@ -3,7 +3,7 @@
 > 三套隔离的绘图/分析后端 + 分层阅读 + 可装载 mod。
 > 本仓库**只含内核**：路由、API 文档、工作台、装载器、安装器。
 > 具体能力（差异表达、剂量反应、配色包、Prism/SPSS…）在
-> [`sci-figure-kit-mods`](https://github.com/<you>/sci-figure-kit-mods)。
+> [`sci-figure-kit-mods`](https://github.com/Ke-wood/sci-figure-kit-mods)。
 
 **不碰你的全局 Python，不改 PATH。**
 
@@ -37,7 +37,7 @@ SKILL.md            内置后端 + 工作流（不含任何具体 mod）
 ## 安装
 
 ```bash
-git clone <this repo> && cd sci-figure-kit
+git clone https://github.com/Ke-wood/sci-figure-kit-core && cd sci-figure-kit-core
 python install/bootstrap.py --root ~/sci-fig      # 或 D:/app
 python scripts/check_envs.py                      # 期望 11 PASS
 ```

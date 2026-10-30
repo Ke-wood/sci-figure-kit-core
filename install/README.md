@@ -131,6 +131,7 @@ python scripts/check_envs.py      # 期望 11 PASS / 0 FAIL
 | 症状 | 处理 |
 |---|---|
 | `找不到 Python ≥3.10` | 装官方 Python 并勾选 Add to PATH |
+| `WinError 5 ... pip\cache` 或 `failed-wheel-build-for-install` | pip 的缓存目录不可写（受控机器、只读 profile、沙箱）。`PIP_NO_CACHE_DIR=1` 重跑即可 |
 | R 复用后包找不到 | 确认 `envs.json` 里 `r_lib` 指向独立库；所有 R 调用都应带 `R_LIBS` |
 | 没有 conda | 跳过 omicverse，或装 Miniconda 后 `--only omicverse` |
 | 想彻底重来 | 删掉 `<root>` 与 skill 目录下的 `envs.json`，重跑 |

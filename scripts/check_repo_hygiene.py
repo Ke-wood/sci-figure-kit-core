@@ -3,13 +3,18 @@
 
 跑法：python scripts/check_repo_hygiene.py
 CI 与本地提交前都应通过。
+
+除了扫字符串，这里还有一条**行为**检查：把 SCI_FIG_ROOT 指到临时目录跑一遍
+`bootstrap.py --dry-run`，输出里不许再出现别的根目录。字符串能骗过去，行为不能。
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -23,6 +28,12 @@ FORBIDDEN = [
     re.compile(r"/Users/[A-Za-z0-9_.-]+/"),
 ]
 
+# 未替换的模板占位符：曾经四个 install_*.sh 里写着 {root}/envs/...，
+# 照跑会在当前目录建出一个名叫 "{root}" 的目录。
+# 只查 shell 脚本：.py 里的 {root} 是 DEFAULTS 的运行时模板（会 replace 掉），合法。
+PLACEHOLDER = re.compile(r"\{root\}")
+PLACEHOLDER_EXT = {".sh", ".ps1"}
+
 # 不应存在的机器本地文件
 MUST_NOT_EXIST = ["envs.json", "_state.json", "scripts/_probe", ".venv"]
 
@@ -32,6 +43,56 @@ def iter_files():
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for name in filenames:
             yield os.path.join(dirpath, name)
+
+
+def check_sources_module() -> list[str]:
+    """下载源预设必须字段齐全、URL 合法；离线目录要能转成 file:// 仓库。"""
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    try:
+        import sources
+    except Exception as exc:  # noqa: BLE001
+        return [f"scripts/sources.py 无法导入：{exc}"]
+
+    out: list[str] = []
+    need = ("label", "pip_index", "cran", "bioc", "conda_channels")
+    for name, p in sources.PRESETS.items():
+        for k in need:
+            if k not in p:
+                out.append(f"下载源 {name} 缺字段 {k}")
+        for k in ("cran", "bioc"):
+            u = p.get(k) or ""
+            if not u.startswith(("https://", "http://", "file://")):
+                out.append(f"下载源 {name} 的 {k} 不是合法 URL：{u!r}")
+        if not p.get("conda_channels"):
+            out.append(f"下载源 {name} 没有 conda 频道")
+    url = sources.cran_file_url(tempfile.gettempdir())
+    if not url.startswith("file:///"):
+        out.append(f"离线目录转 file:// 失败：{url!r}")
+    return out
+
+
+def check_root_is_configurable() -> list[str]:
+    """把 SCI_FIG_ROOT 指到临时目录跑 dry-run，输出里不许再出现别的根目录。"""
+    probe = os.path.join(tempfile.gettempdir(), "sci_fig_hygiene_root")
+    env = dict(os.environ, SCI_FIG_ROOT=probe)
+    env.pop("SCI_FIG_ENVS", None)
+    try:
+        proc = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "install", "bootstrap.py"),
+             "--dry-run", "--only", "figkit", "--source", "official"],
+            capture_output=True, text=True, timeout=180, env=env)
+    except Exception as exc:  # noqa: BLE001
+        return [f"bootstrap.py --dry-run 跑不起来：{exc}"]
+
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0:
+        return [f"bootstrap.py --dry-run 退出码 {proc.returncode}：{out[-400:]}"]
+    if probe.replace("\\", "/") not in out.replace("\\", "/"):
+        return ["bootstrap.py 没有按 SCI_FIG_ROOT 布局安装路径（写死了根目录？）"]
+    leaked = [ln.strip() for ln in out.splitlines() if "D:/app" in ln.replace("\\", "/")]
+    if leaked:
+        return ["bootstrap.py 输出里还有写死的 D:/app：" + leaked[0][:120]]
+    return []
 
 
 def main() -> int:
@@ -56,6 +117,10 @@ def main() -> int:
             for m in pat.finditer(text):
                 line = text[: m.start()].count("\n") + 1
                 problems.append(f"{rel}:{line} 含本机路径 {m.group(0)!r}")
+        if ext in PLACEHOLDER_EXT:
+            for m in PLACEHOLDER.finditer(text):
+                line = text[: m.start()].count("\n") + 1
+                problems.append(f"{rel}:{line} 含未替换的占位符 {{root}}")
 
     mods_dir = os.path.join(ROOT, "mods")
     mod_count = 0
@@ -81,6 +146,9 @@ def main() -> int:
     routing = os.path.join(ROOT, "references", "routing-mods.md")
     if not os.path.isfile(routing):
         problems.append("缺 references/routing-mods.md（跑 scripts/mod.py routes 生成）")
+
+    problems.extend(check_sources_module())
+    problems.extend(check_root_is_configurable())
 
     if problems:
         print(f"FAIL：{len(problems)} 处问题")

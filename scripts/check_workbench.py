@@ -8,7 +8,7 @@ U+2212、缺字启发式、矢量外框与字体）与偏离追踪（源文件�
 一条用例 —— 尤其是矢量那两条：Type 3 字体与路径化的 SVG 都「看起来完全正常」，
 不主动去查就永远不会发现。
 
-全部在 `D:/app/envs/_wb_check` 里跑，**不碰 skill 树、不碰用户项目**。
+全部在 `{root}/envs/_wb_check` 里跑，**不碰 skill 树、不碰用户项目**。
 跑完自动清理（`--keep` 可保留现场）。
 
 只依赖标准库，用全局 Python 跑：
@@ -33,8 +33,24 @@ except Exception:
 HERE = os.path.dirname(os.path.abspath(__file__))
 SKILL_DIR = os.path.dirname(HERE)
 WB = os.path.join(HERE, "workbench.py")
-ROOT = "D:/app/envs/_wb_check"
+# 自检目录跟着安装根走，不写死盘符
+ROOT = (os.environ.get("SCI_FIG_CHECK_DIR")
+        or os.path.join(os.environ.get("SCI_FIG_ROOT") or (
+            "D:/app" if os.name == "nt" else os.path.expanduser("~/.sci-fig")),
+            "envs", "_wb_check")).replace("\\", "/")
 SRC = os.path.join(ROOT, "_src")
+
+
+def _has_mod(mid: str) -> bool:
+    return os.path.isdir(os.path.join(SKILL_DIR, "mods", mid))
+
+
+# 核心仓库不带 mod（mod 在 sci-figure-kit-mods）。装了真 mod 就用真模板，
+# 没装就用仓库自带的 _template —— 这样「clone 下来直接跑」也是绿的。
+_R_TPL = ("ggpubfigs:templates/theme-demo.R" if _has_mod("ggpubfigs")
+          else os.path.join(SKILL_DIR, "mods", "_template", "templates", "example.R"))
+_PY_TPL = ("sci-figure:templates/scatter-groups.py" if _has_mod("sci-figure")
+           else os.path.join(SKILL_DIR, "mods", "_template", "templates", "example.py"))
 
 
 def _load_workbench():
@@ -145,7 +161,7 @@ def main():
 
     # ---- W1/W3：自带数据的模板能在空项目里出图，且尺寸精确 ----
     def w1():
-        rc, _ = wb("new", "demo", "--from", "ggpubfigs:templates/theme-demo.R")
+        rc, _ = wb("new", "demo", "--from", _R_TPL)
         if rc != 0:
             return False, "建项目失败"
         rc, d = render_json("demo")
@@ -160,7 +176,7 @@ def main():
     # ---- W3b：双栏 183mm ----
     def w3b():
         rc, _ = wb("new", "scat", "--data", os.path.join(SRC, "scatter.csv"),
-                   "--from", "sci-figure:templates/scatter-groups.py")
+                   "--from", _PY_TPL)
         if rc != 0:
             return False, "建项目失败"
         rc, d = render_json("scat")
@@ -173,10 +189,10 @@ def main():
 
     # ---- W2：R 元字符不炸（证明走临时 .R 文件，没用 -e）----
     def w2():
-        rc, _ = wb("new", "meta", "--from", "ggpubfigs:templates/theme-demo.R")
+        rc, _ = wb("new", "meta", "--from", _R_TPL)
         if rc != 0:
             return False, "建项目失败"
-        p = os.path.join(ROOT, "projects", "meta", "theme-demo.R")
+        p = os.path.join(ROOT, "projects", "meta", os.path.basename(_R_TPL))
         with open(p, encoding="utf-8") as fh:
             code = fh.read()
         # | 与 < 都是 Windows Rscript 在 -e 路径下会被 shell 吃掉的元字符
@@ -196,7 +212,7 @@ def main():
 
     # ---- W5：字面量 U+2212 在渲染前被拒，且不产出图 ----
     def w5():
-        rc, _ = wb("new", "u2212", "--from", "ggpubfigs:templates/theme-demo.R")
+        rc, _ = wb("new", "u2212", "--from", _R_TPL)
         if rc != 0:
             return False, "建项目失败"
         png = os.path.join(ROOT, "projects", "u2212", "out.png")
@@ -218,7 +234,7 @@ def main():
 
     # ---- W4：有中文却没设字体 -> 缺字闸门 FAIL ----
     def w4():
-        rc, _ = wb("new", "cjk", "--from", "ggpubfigs:templates/theme-demo.R")
+        rc, _ = wb("new", "cjk", "--from", _R_TPL)
         if rc != 0:
             return False, "建项目失败"
         write_script("cjk",
@@ -241,7 +257,7 @@ def main():
 
     def w6():
         rc, _ = wb("new", "edit", "--data", os.path.join(SRC, "bar.csv"),
-                   "--from", "sci-figure:templates/bar-with-points.py")
+                   "--from", _PY_TPL)
         if rc != 0:
             return False, "建项目失败"
         pd = os.path.join(ROOT, "projects", "edit")
@@ -477,7 +493,7 @@ def main():
         """极简项目：只画一条线，用来单独考矢量闸门。
         key=None 表示不写 vector= 那一行。"""
         rc, _ = wb("new", name, "--data", os.path.join(SRC, "bar.csv"),
-                   "--from", "sci-figure:templates/bar-with-points.py")
+                   "--from", _PY_TPL)
         if rc != 0:
             return 2, {"_raw": "建项目失败"}
         fm = ("# figwork: data=data.csv\n# figwork: size=nature1\n"
@@ -536,7 +552,7 @@ def main():
     # ---- W23：手工改过的矢量文件，在下次渲染覆盖它之前被识别出来 ----
     # 矢量是唯一「你会拿去手工编辑」的产物，也是唯一会被渲染静默盖掉成果的地方。
     def w23():
-        rc, _ = wb("new", "v_touch", "--from", "ggpubfigs:templates/theme-demo.R")
+        rc, _ = wb("new", "v_touch", "--from", _R_TPL)
         if rc != 0:
             return False, "建项目失败"
         rc, _ = render_json("v_touch")

@@ -209,7 +209,7 @@ PYTHONIOENCODING=utf-8 {root}/envs/omicverse/python.exe script.py
 
 **根因**：Git Bash 的 `/tmp` 映射到 MSYS 虚拟目录，**Windows 原生的 conda.exe / python.exe 看不见**。
 
-**修法**：临时文件一律用双方都能看见的路径，如 `D:/app/envs/_tmp.json`。
+**修法**：临时文件一律用双方都能看见的路径，如 `<root>/envs/_tmp.json`。
 
 ---
 

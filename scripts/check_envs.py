@@ -29,6 +29,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.environ.get("SCI_FIG_ROOT") or (
     "D:/app" if os.name == "nt" else os.path.expanduser("~/.sci-fig"))
 
+try:
+    import sources
+except ImportError:                      # 按路径加载时 sys.path 里没有 scripts/
+    sys.path.insert(0, HERE)
+    import sources
+
 
 def _load_mod():
     """import 兄弟脚本 mod.py，只为复用它的纯函数（目前是 png_dims）。
@@ -393,6 +399,7 @@ def main():
         print("sci-figure-kit 环境自检")
         print("=" * 68)
         print(f"配置来源：{src}")
+        print(sources.describe(sources.resolve(cfg)))
         print()
 
     results = []

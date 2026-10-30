@@ -31,7 +31,7 @@ project.json       项目状态与溯源
 data.edits.jsonl   编辑审计（append-only）
 ```
 
-默认落在 `D:/app/workbench/projects/`（机器本地，**不进分享 zip**）。
+默认落在 `<root>/workbench/projects/`（机器本地，**不进分享 zip**）。
 `--root` 或 `FIGWORK_ROOT` 可改。
 
 ## 命令

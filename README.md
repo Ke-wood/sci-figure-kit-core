@@ -62,6 +62,21 @@ python install/bootstrap.py --root X --r-mode reuse --r-path "C:/Program Files/R
 Python 只用来建 venv（不下载解释器）；conda 用你现有的、建一个 prefix，不动 base 环境。
 细节见 [`install/README.md`](install/README.md)。
 
+### 下载源自己选
+
+默认官方源，国内或内网一条命令换镜像：
+
+```bash
+python install/bootstrap.py --root X --source tuna      # 清华；还有 ustc / aliyun
+python install/bootstrap.py --list-sources              # 看全部预设
+```
+
+单项也能换（`--pip-index` / `--cran-mirror` / `--bioc-mirror` / `--conda-channel`），
+或者 `--offline-dir` 完全离线。选择会写进 `envs.json`，之后装 mod 沿用同一套源。
+
+> R 版本不写死在代码里：CRAN 只保留最新一版安装器，写死会 404
+> （`R-4.6.1-win.exe` 已经 404，现在只有 4.6.2），所以装的时候现查目录。
+
 ## 装 mod
 
 ```bash
@@ -99,6 +114,9 @@ python scripts/mod.py routes              # 重建 routing-mods.md
 
 - `check_envs.py` **11/11**（三套环境 + 中文渲染 + mod 一致性）
 - `check_mod_guard.py` **81/81**（装载器对抗用例，CI 每次跑）
+- `check_workbench.py` **20/20**（工作台闸门；**clone 下来就能跑**，不依赖 mods 仓库）
+- `check_repo_hygiene.py`：无本机路径 + 把 `SCI_FIG_ROOT` 指到临时目录跑一遍
+  `bootstrap --dry-run`，输出里不许出现别的根目录
 - `mod.py index` 在空 `mods/` 下生成「当前没有已装载的 mod」；装一个 mod 后自动出表
 
 ## 目录
@@ -109,7 +127,7 @@ mods/INDEX.md         已装载 mod 索引（自动生成）
 mods/README.md        怎么装 / 怎么写 mod
 mods/_template/       新 mod 骨架
 references/           路由、API 实测、配色、图型配方、工作台、排错
-scripts/              check_envs · mod.py · workbench.py · installers
+scripts/              check_envs · mod.py · workbench.py · sources.py · installers
 install/              跨机器安装器（自选安装根目录）
 .github/workflows/    CI：编译 + 卫生 + 81 条安全用例 + 清单可加载
 ```

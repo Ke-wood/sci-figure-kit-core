@@ -1,10 +1,11 @@
 # sci-figure-kit —— figkit 环境依赖（AI 专用绘图环境，隔离 venv）
 #
 # 安装方式（必须用绝对路径的 venv python，禁止裸 pip）：
-#   D:/app/envs/figkit/Scripts/python.exe -m pip install -r requirements-figkit.txt
+#   <root>/envs/figkit/Scripts/python.exe -m pip install -r requirements-figkit.txt
 #
-# 环境位置：D:/app/envs/figkit   （Python 3.14 venv，基于全局 3.14.5）
-# 全局 Python 3.14.5 不受任何影响，本文件内所有包只装进 venv。
+# 环境位置：<root>/envs/figkit（venv；<root> 由 SCI_FIG_ROOT 决定，默认 D:/app）
+# 你的全局 Python 不受任何影响，本文件内所有包只装进 venv。
+# 换下载源：--source tuna|ustc|aliyun，或 --pip-index <url>（见 install/README.md）。
 #
 # 本文件**不登记**任何 mod 的依赖。mod 装什么由 mods/<id>/mod.json 声明、
 # 由 scripts/mod.py 执行（见 mods/README.md）。

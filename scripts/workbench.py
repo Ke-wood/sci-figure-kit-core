@@ -412,8 +412,10 @@ def resolve_spec(fm, project_dir):
 # ---------------------------------------------------------------- 项目
 
 def wb_root(cfg, override=None):
-    root = override or os.environ.get("FIGWORK_ROOT") \
-        or cfg.get("workbench_root") or "D:/app/workbench"
+    default_root = os.environ.get("SCI_FIG_ROOT") or (
+        "D:/app" if os.name == "nt" else os.path.expanduser("~/.sci-fig"))
+    root = (override or os.environ.get("FIGWORK_ROOT")
+            or cfg.get("workbench_root") or f"{default_root}/workbench")
     root = os.path.abspath(root).replace("\\", "/")
     # 工作台是机器本地资产，绝不写进 skill 树 —— 那会脏了分享档
     if os.path.abspath(root).lower().startswith(os.path.abspath(SKILL_DIR).lower()):
@@ -514,7 +516,20 @@ def new_project(cfg, name, data_src=None, from_spec=None, preset=None, root=None
 
 
 def _place_template(from_spec, pdir):
-    """`<mod>:<相对路径>` 或 `<mod>` —— 把模板落成项目的绘图脚本。"""
+    """`<mod>:<相对路径>` / `<mod>` / 直接给一个 .R/.py 文件路径。
+
+    支持直接给路径，是为了「拿我自己的脚本当模板」以及让核心仓库的回归测试
+    不依赖另一个仓库的 mod（核心仓库的 mods/ 是空的）。
+    """
+    # 先按文件路径判定：Windows 的 "D:" 里也有冒号，不能靠冒号区分两种写法
+    if from_spec.lower().endswith((".r", ".py")) and os.path.isfile(from_spec):
+        src = os.path.abspath(from_spec)
+        dst = os.path.join(pdir, os.path.basename(src))
+        with open(src, "rb") as a, open(dst, "wb") as b:
+            b.write(a.read())
+        return dst, {"mod": None, "template": os.path.basename(src),
+                     "sha256": sha256(dst)}
+
     if ":" in from_spec:
         mid, rel = from_spec.split(":", 1)
     else:
@@ -1194,7 +1209,7 @@ USAGE = """sci-figure-kit 绘图工作台（无界面核心）
   workbench.py edit <项目> --row N --col 列名 --value 值
   workbench.py revert <项目>
 
-项目默认在 D:/app/workbench/projects/（机器本地，不进分享 zip）。
+项目默认在 <root>/workbench/projects/（机器本地，不进分享 zip）。
 可用 --root <dir> 或环境变量 FIGWORK_ROOT 改。
 
 模板契约见 mods/README.md；运行期规则见 references/workbench.md。

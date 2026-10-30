@@ -52,6 +52,14 @@ ROOT = os.environ.get("SCI_FIG_ROOT") or (
     "D:/app" if os.name == "nt" else os.path.expanduser("~/.sci-fig"))
 ROUTES_MD = os.path.join(SKILL_DIR, "references", "routing-mods.md")
 
+# 下载源解析（pip 索引 / CRAN / Bioc / conda）。和 installer 共用同一份实现，
+# 免得「安装时用清华、装 mod 时回官方」这种两边不一致。
+try:
+    import sources
+except ImportError:                     # 本文件被按路径加载时 sys.path 里没有 scripts/
+    sys.path.insert(0, SCRIPT_DIR)
+    import sources
+
 UA = "sci-figure-kit-mod-loader"
 
 # ---------------------------------------------------------------- 默认配置
@@ -276,6 +284,15 @@ def load_config():
                 print(f"  !! 配置文件 {p} 解析失败：{exc}")
             break
     return cfg, src
+
+
+def _src(cfg):
+    """本次要用的下载源（缓存，避免每个 mod 都重解析一遍）。"""
+    s = cfg.get("_sources")
+    if not s:
+        s = sources.resolve(cfg)
+        cfg["_sources"] = s
+    return s
 
 
 def state_path(cfg):
@@ -773,8 +790,8 @@ def build_commands(mod, cfg, pkg_root):
         py = env_python(cfg, env)
         cmds.append({
             "phase": "activate", "kind": "py",
-            "argv": [py, "-m", "pip", "install", "--disable-pip-version-check",
-                     "--no-color", "--progress-bar", "off", inst["spec"]],
+            "argv": [py, "-m", "pip", "install", *sources.pip_args(_src(cfg)),
+                     inst["spec"]],
             "why": f"PyPI 包 {inst['spec']} -> {env}",
         })
     elif t == "pysrc":
@@ -783,8 +800,8 @@ def build_commands(mod, cfg, pkg_root):
             "phase": "activate", "kind": "py",
             # 默认 build isolation：两个 venv 都没有 setuptools，
             # 加 --no-build-isolation 会立刻失败；-e 同理。永不添加。
-            "argv": [py, "-m", "pip", "install", "--disable-pip-version-check",
-                     "--no-color", "--progress-bar", "off", r_lit(pkg_root)],
+            "argv": [py, "-m", "pip", "install", *sources.pip_args(_src(cfg)),
+                     r_lit(pkg_root)],
             "why": f"源码包（GitHub 拉下来的）-> {env}",
         })
     elif t == "rpkg":
@@ -792,11 +809,13 @@ def build_commands(mod, cfg, pkg_root):
         # limma / clusterProfiler / fgsea 这些都不在 CRAN 上，早期写法会直接失败。
         # 末尾用 requireNamespace 兜底并 stop()，否则 Rscript 仍是 exit 0，
         # 失败会被当成装好了。
+        src = _src(cfg)
         cmds.append({
             "phase": "activate", "kind": "r",
             "code": (f'lib <- "{r_lit(cfg["r_lib"])}"\n'
                      f'pkg <- "{inst["pkg"]}"\n'
-                     'repos <- c(CRAN = "https://cloud.r-project.org")\n'
+                     f'{sources.bioc_options(src)}\n'
+                     f'repos <- {sources.cran_repos(src)}\n'
                      'install.packages(pkg, lib = lib, repos = repos,\n'
                      '                 dependencies = NA, type = "binary")\n'
                      'if (!requireNamespace(pkg, lib.loc = lib, quietly = TRUE)) {\n'
@@ -821,7 +840,7 @@ def build_commands(mod, cfg, pkg_root):
             # Python 侧进 URL，R 拿到的永远只是本机路径。
             "code": f'remotes::install_local("{r_lit(pkg_root)}", '
                     f'lib = "{r_lit(cfg["r_lib"])}", upgrade = "never", '
-                    f'repos = c(CRAN = "https://cloud.r-project.org"))',
+                    f'repos = {sources.cran_repos(_src(cfg))})',
             "why": f"GitHub R 包 -> {cfg['r_lib']}",
         })
     # mplstyle / rstyle / snippets 没有 activate —— 它们只登记路径
@@ -2368,11 +2387,39 @@ USAGE = """sci-figure-kit mod 加载器
   mod.py routes                     重新生成 references/routing-mods.md
   mod.py index                      重新生成 mods/INDEX.md（装/卸后自动）
   mod.py pack                       打包 share zip（默认 <skill>/dist/）
+  mod.py sources [<预设>]           查看下载源 / 切换（official|tuna|ustc|aliyun）
 
 想挂一个新的绘图方案：
   python scripts/mod.py add https://github.com/owner/repo
   python scripts/mod.py install <生成的 id> --yes
 """
+
+
+def cmd_sources(cfg, args):
+    """查看 / 切换下载源。
+
+    切换只改配置，不立刻下载任何东西；下一次 install / update 生效。
+    """
+    if args:
+        name = args[0]
+        if name not in sources.preset_names():
+            print(f"未知下载源：{name}；可选：{' / '.join(sources.preset_names())}",
+                  file=sys.stderr)
+            return 2
+        target = next((p for p in CONFIG_PATHS if p and os.path.isfile(p)),
+                      os.path.join(SKILL_DIR, "envs.json"))
+        block = sources.to_config(sources.resolve(cfg, source=name))
+        data = sources.load_json(target)
+        data.update(block)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        cfg.update(block)
+        cfg.pop("_sources", None)
+        print(f"已切换下载源：{name}  →  {target}")
+    print(sources.describe(sources.resolve(cfg)))
+    return 0
 
 
 def main():
@@ -2413,6 +2460,8 @@ def main():
             return cmd_index(cfg, rest)
         if cmd == "pack":
             return cmd_pack(cfg, rest)
+        if cmd == "sources":
+            return cmd_sources(cfg, rest)
         print(f"未知子命令：{cmd}\n", file=sys.stderr)
         print(USAGE, file=sys.stderr)
         return 2

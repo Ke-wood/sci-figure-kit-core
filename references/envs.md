@@ -26,6 +26,36 @@ python install/bootstrap.py --root /path/to/sci-fig --only figkit
 
 The three backends are independent; a missing backend fails only its own health probes.
 
+## Download sources (user's choice)
+
+Everything is fetched from configurable sources — nothing is hardcoded except the
+official defaults:
+
+```bash
+python install/bootstrap.py --root X --source tuna     # official | tuna | ustc | aliyun
+python install/bootstrap.py --list-sources
+python scripts/mod.py sources [tuna]                   # show / switch, used by mod installs too
+```
+
+Per-channel overrides: `--pip-index`, `--cran-mirror`, `--bioc-mirror`,
+`--conda-channel`, `--offline-dir`. Env vars: `SCI_FIG_SOURCE`,
+`SCI_FIG_PIP_INDEX`, `SCI_FIG_CRAN`, `SCI_FIG_BIOC`, `SCI_FIG_CONDA_CHANNELS`,
+`SCI_FIG_OFFLINE_DIR`. The choice is persisted in `envs.json`
+(`source_preset` + `sources{}`), so re-runs and mod installs reuse it.
+
+`official` means for pip: **pass no `--index-url` at all**, i.e. honour the user's
+`PIP_INDEX_URL` / `pip.ini`.
+
+`--offline-dir D:/bundle` expects `bundle/wheels/*.whl` (pip `--no-index
+--find-links`) and `bundle/cran/` (a CRAN repo used as a `file:///` source).
+
+### R version is resolved, not pinned
+
+CRAN keeps only the **latest** Windows installer in `bin/windows/base/`; a pinned
+version 404s within weeks (`R-4.6.1-win.exe` is already gone — only 4.6.2 remains).
+The installer lists that directory and takes the max, falling back to a constant
+only if the listing fails. Pin explicitly with `--r-version`.
+
 ## Why R comes from CRAN, not conda
 
 conda-forge's Windows R ships **two mingw toolchains** (m2w64 based on MSVCRT and

@@ -28,13 +28,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.request
 
 SKILL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(SKILL, "scripts")
 REQUIREMENTS = os.path.join(SKILL, "requirements-figkit.txt")
-R_VERSION = "4.6.1"
-R_URL = f"https://cloud.r-project.org/bin/windows/base/R-{R_VERSION}-win.exe"
+
+sys.path.insert(0, SCRIPTS)
+import sources  # noqa: E402  （本地模块：先把 scripts/ 放进 sys.path）
+
+# 版本号不再写死：CRAN 的 base/ 目录只留最新一版，写死会隔几周就 404。
+# 真值在 install_r() 里现查（见 sources.latest_r_version），这里只是兜底。
+R_VERSION = sources.FALLBACK_R_VERSION
 
 IS_WIN = os.name == "nt"
 
@@ -79,12 +83,13 @@ def pick_base_python() -> str:
     raise SystemExit("找不到 Python ≥3.10，无法建 figkit 环境。先装 Python 再说。")
 
 
-def install_figkit(cfg: dict, dry: bool) -> bool:
+def install_figkit(cfg: dict, dry: bool, src: dict) -> bool:
     say("\n---------- [figkit] Python 绘图环境 ----------")
+    pip = sources.pip_args(src)
     if os.path.isfile(cfg["figpy"]):
         say(f"已存在：{cfg['figpy']}（只同步依赖）")
         if not dry:
-            run([cfg["figpy"], "-m", "pip", "install", "-q", "-r", REQUIREMENTS])
+            run([cfg["figpy"], "-m", "pip", "install", "-q", *pip, "-r", REQUIREMENTS])
         return True
 
     base = pick_base_python()
@@ -93,8 +98,8 @@ def install_figkit(cfg: dict, dry: bool) -> bool:
         return True
     os.makedirs(os.path.dirname(cfg["venv"]), exist_ok=True)
     run([base, "-m", "venv", cfg["venv"]])
-    run([cfg["figpy"], "-m", "pip", "install", "-q", "--upgrade", "pip"])
-    run([cfg["figpy"], "-m", "pip", "install", "-r", REQUIREMENTS])
+    run([cfg["figpy"], "-m", "pip", "install", "-q", *pip, "--upgrade", "pip"])
+    run([cfg["figpy"], "-m", "pip", "install", "-q", *pip, "-r", REQUIREMENTS])
     run([cfg["figpy"], "-c",
          "import matplotlib,cnsplots;print('figkit ok', matplotlib.__version__, cnsplots.__version__)"])
     return True
@@ -131,7 +136,7 @@ def find_existing_r() -> str | None:
     return sorted(hits)[-1] if hits else None
 
 
-def install_r(cfg: dict, dry: bool) -> bool:
+def install_r(cfg: dict, dry: bool, src: dict) -> bool:
     mode = cfg.get("r_mode", "install")
     say("\n---------- [R] ----------")
     if mode == "reuse":
@@ -148,11 +153,12 @@ def install_r(cfg: dict, dry: bool) -> bool:
         say(f"已存在：{cfg['rscript']}")
     else:
         exe = os.path.join(cfg["root"], "envs", "_R-installer.exe")
-        say(f"下载 {R_URL}")
+        url, ver = sources.r_installer_url(src)
+        say(f"下载 R {ver}：{url}")
         if dry:
             return True
         os.makedirs(os.path.dirname(exe), exist_ok=True)
-        urllib.request.urlretrieve(R_URL, exe)
+        sources.download(url, exe)          # 带重试；250 MB 一次抖动不用重来
         say(f"静默安装到 {cfg['r']}（无需管理员权限）")
         run([exe, "/VERYSILENT", f"/DIR={cfg['r']}", "/NORESTART", "/SUPPRESSMSGBOXES"], timeout=1800)
         os.remove(exe)
@@ -165,7 +171,8 @@ def install_r(cfg: dict, dry: bool) -> bool:
 lib <- "{cfg['r_lib']}"
 dir.create(lib, recursive = TRUE, showWarnings = FALSE)
 .libPaths(c(lib, .libPaths()))     # 让 requireNamespace 也看得到独立库
-repos <- c(CRAN = "https://cloud.r-project.org")
+{sources.bioc_options(src)}        # BiocManager 走镜像
+repos <- {sources.cran_repos(src)}
 core <- c("dplyr","tidyr","stringr","purrr","tibble","forcats","magrittr",
           "rlang","data.table","reshape2","matrixStats",
           "ggplot2","scales","patchwork","cowplot","viridis","RColorBrewer",
@@ -208,30 +215,33 @@ def find_conda() -> str | None:
     return None
 
 
-def install_omicverse(cfg: dict, dry: bool) -> bool:
+def install_omicverse(cfg: dict, dry: bool, src: dict) -> bool:
     say("\n---------- [omicverse] conda prefix ----------")
     conda = find_conda()
     if not conda:
         say("没找到 conda；跳过 omicverse。装了 Miniconda 后可用 --only omicverse 补。")
         return False
     say(f"conda: {conda}")
+    pip = sources.pip_args(src)
     if os.path.isfile(cfg["omvpy"]):
         say(f"已存在：{cfg['omvpy']}（只同步包）")
     else:
         if dry:
             return True
         os.makedirs(os.path.dirname(cfg["omv"]), exist_ok=True)
+        # --override-channels：不让机器上的 .condarc 决定频道（不同机器默认值不同，
+        # 且 Anaconda 的 defaults 频道有 ToS 门槛）。
         run([conda, "create", "-y", "--prefix", cfg["omv"],
-             "--override-channels", "-c", "conda-forge", "python=3.13", "pip"], timeout=3600)
+             *sources.conda_channel_args(src), "python=3.13", "pip"], timeout=3600)
     if not dry:
-        run([cfg["omvpy"], "-m", "pip", "install", "-q", "--upgrade", "pip"])
-        run([cfg["omvpy"], "-m", "pip", "install", "omicverse==2.3.2"], timeout=5400)
+        run([cfg["omvpy"], "-m", "pip", "install", "-q", *pip, "--upgrade", "pip"])
+        run([cfg["omvpy"], "-m", "pip", "install", *pip, "omicverse==2.3.2"], timeout=5400)
     return True
 
 
-def write_config(cfg: dict) -> None:
+def write_config(cfg: dict, src: dict) -> None:
     data = {
-        "schema": 2,
+        "schema": 3,
         "conda_exe": find_conda() or "",
         "figkit_python": cfg["figpy"],
         "figkit_mode": "venv",
@@ -245,6 +255,7 @@ def write_config(cfg: dict) -> None:
         "mods_vendor": cfg["vendor"],
         "fonts": {"cjk": "C:/Windows/Fonts/simhei.ttf", "cjk_family": "SimHei"},
     }
+    data.update(sources.to_config(src))     # source_preset + sources{}
     for target in (os.path.join(cfg["root"], "envs", "envs.json"),
                    os.path.join(SKILL, "envs.json")):
         os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -263,12 +274,46 @@ def main() -> int:
     ap.add_argument("--r-mode", choices=["auto", "reuse", "install"], default="auto",
                     help="auto=检测到已有 R 就复用；reuse=必须复用；install=总是装一套新的")
     ap.add_argument("--r-path", default=None, help="已有 R 的 Rscript 路径（配合 --r-mode reuse）")
+    ap.add_argument("--source", choices=sources.preset_names(), default=None,
+                    help="下载源预设（默认 official）；也可用 SCI_FIG_SOURCE 指定")
+    ap.add_argument("--pip-index", default=None, help="覆盖 pip 索引 URL")
+    ap.add_argument("--cran-mirror", default=None, help="覆盖 CRAN 镜像")
+    ap.add_argument("--bioc-mirror", default=None, help="覆盖 Bioconductor 镜像根")
+    ap.add_argument("--conda-channel", action="append", default=None,
+                    help="覆盖 conda 频道（可重复）")
+    ap.add_argument("--offline-dir", default=None,
+                    help="离线目录：内含 wheels/ 与 cran/，不联网安装")
+    ap.add_argument("--r-version", default=None,
+                    help="指定 R 版本（默认现查 CRAN 目录里的最新版）")
+    ap.add_argument("--list-sources", action="store_true", help="列出可选下载源后退出")
     ap.add_argument("--dry-run", action="store_true", help="只打印将要做的事")
     args = ap.parse_args()
 
+    if args.list_sources:
+        say("可选下载源（--source <名>，或环境变量 SCI_FIG_SOURCE）：")
+        for name, p in sources.PRESETS.items():
+            say(f"  {name:<9} {p['label']:<12} "
+                f"pip={p['pip_index'] or 'pip 默认'}  cran={p['cran']}")
+        say("\n单项覆盖：--pip-index / --cran-mirror / --bioc-mirror / --conda-channel")
+        return 0
+
+    # 已有的 envs.json 里记着上次选的源，重跑时沿用（命令行参数优先）
+    existing = {}
+    for p in (os.path.join(SKILL, "envs.json"),
+              os.path.join(args.root, "envs", "envs.json")):
+        if os.path.isfile(p):
+            existing = sources.load_json(p)
+            if existing:
+                break
+    src = sources.resolve(existing, source=args.source,
+                          pip_index=args.pip_index, cran=args.cran_mirror,
+                          bioc=args.bioc_mirror, conda_channels=args.conda_channel,
+                          offline_dir=args.offline_dir, r_version=args.r_version)
+
     cfg = layout(args.root)
     cfg["r_mode"] = "install"
-    if args.r_mode in ("auto", "reuse"):
+    # 只装 figkit / omicverse 时不必探测 R，否则会多打印一句与本次无关的提示
+    if args.only in (None, "r") and args.r_mode in ("auto", "reuse"):
         found = args.r_path or find_existing_r()
         if found and os.path.isfile(found):
             cfg["rscript"] = found
@@ -284,6 +329,7 @@ def main() -> int:
     say("=" * 60)
     say(f"sci-figure-kit 安装  →  {cfg['root']}")
     say(f"skill: {SKILL}")
+    say(sources.describe(src))
     say("=" * 60)
     if args.dry_run:
         say("（--dry-run：只打印，不动磁盘）")
@@ -293,17 +339,17 @@ def main() -> int:
     for step in todo:
         try:
             if step == "figkit":
-                results[step] = install_figkit(cfg, args.dry_run)
+                results[step] = install_figkit(cfg, args.dry_run, src)
             elif step == "r":
-                results[step] = install_r(cfg, args.dry_run)
+                results[step] = install_r(cfg, args.dry_run, src)
             else:
-                results[step] = install_omicverse(cfg, args.dry_run)
+                results[step] = install_omicverse(cfg, args.dry_run, src)
         except SystemExit as exc:
             say(f"✗ {step} 失败：{exc}")
             results[step] = False
 
     if not args.dry_run:
-        write_config(cfg)
+        write_config(cfg, src)
         say("\n---------- [体检] ----------")
         env = dict(os.environ, SCI_FIG_ENVS=os.path.join(cfg["root"], "envs", "envs.json"))
         subprocess.run([sys.executable, os.path.join(SCRIPTS, "check_envs.py")], env=env)

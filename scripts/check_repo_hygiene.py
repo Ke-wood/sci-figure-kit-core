@@ -68,6 +68,13 @@ def check_sources_module() -> list[str]:
     url = sources.cran_file_url(tempfile.gettempdir())
     if not url.startswith("file:///"):
         out.append(f"离线目录转 file:// 失败：{url!r}")
+
+    # 显式点名预设时，envs.json 里存下的逐项值不许把它顶回去
+    stale = {"source_preset": "tuna",
+             "sources": {"cran": sources.PRESETS["tuna"]["cran"]}}
+    got = sources.resolve(stale, source="official")["cran"]
+    if got != sources.PRESETS["official"]["cran"]:
+        out.append(f"切换预设被旧配置覆盖：official 解析成了 {got}")
     return out
 
 

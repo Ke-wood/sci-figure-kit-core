@@ -111,10 +111,8 @@ def resolve(cfg: dict | None = None, **over) -> dict:
     cfg = cfg or {}
     src: dict = {}
 
-    preset = (over.pop("source", None)
-              or os.environ.get("SCI_FIG_SOURCE")
-              or cfg.get("source_preset")
-              or DEFAULT_PRESET)
+    explicit = over.get("source") or os.environ.get("SCI_FIG_SOURCE")
+    preset = explicit or cfg.get("source_preset") or DEFAULT_PRESET
     if preset not in PRESETS:
         raise ValueError(
             f"未知下载源 {preset!r}；可选：{' / '.join(preset_names())}")
@@ -124,10 +122,14 @@ def resolve(cfg: dict | None = None, **over) -> dict:
     src["preset"] = preset
     src["label"] = PRESETS[preset]["label"]
 
-    user = cfg.get("sources") or {}
-    for k in FIELD_ORDER:
-        if user.get(k):
-            src[k] = user[k]
+    # 显式点名预设时，**忽略** envs.json 里存的逐项值 —— 否则「切回 official」
+    # 会被上次存下的镜像 URL 顶回去，看起来像 switch 没生效。
+    if not explicit:
+        user = cfg.get("sources") or {}
+        for k in FIELD_ORDER:
+            if user.get(k):
+                src[k] = user[k]
+    over.pop("source", None)
 
     for k, var in ENV_KEYS.items():
         v = os.environ.get(var)
@@ -323,11 +325,19 @@ def describe(src: dict) -> str:
 
 
 def to_config(src: dict) -> dict:
-    """给 envs.json 的那两块：source_preset + sources{}。"""
-    plain = {k: src[k] for k in FIELD_ORDER if src.get(k) not in (None, "", [])}
+    """给 envs.json 的那两块：source_preset + sources{}。
+
+    只记**与预设不同的**项。全量记录会在切换预设时把上一次的镜像写回去，
+    于是 `--source official` 看起来没生效。
+    """
+    preset = src.get("preset", DEFAULT_PRESET)
+    base = dict(PRESETS[DEFAULT_PRESET])
+    base.update(PRESETS.get(preset, {}))
+    plain = {k: src[k] for k in FIELD_ORDER
+             if src.get(k) not in (None, "", []) and src[k] != base.get(k)}
     if src.get("offline_dir"):
         plain["offline_dir"] = src["offline_dir"]
-    out = {"source_preset": src.get("preset", DEFAULT_PRESET)}
+    out = {"source_preset": preset}
     if plain:
         out["sources"] = plain
     return out

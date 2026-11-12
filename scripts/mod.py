@@ -126,7 +126,11 @@ CORE_PY = {
 
 # ---------------------------------------------------------------- 白名单
 
-RE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+# id 是**目录名**，与真实包名是两回事，所以限定小写。
+# BiocManager 包 GO.db / org.Hs.eg.db 的 id 写 go.db / org.hs.eg.db，
+# 真名放 install.pkg（见 RE_RPKG，那里才允许大写）。
+# 安全边界：首字符须小写字母数字（排除 "." 与 ".."），字符集无路径分隔符。
+RE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 RE_RPKG = re.compile(r"^[A-Za-z0-9._]+$")
 # PyPI 名 + 可选版本约束（约束可逗号连写，如 >=0.13.2,<0.14）；
 # 禁止前导 '-'（那是 pip 选项），禁止 @ :// ; 空格
@@ -142,8 +146,12 @@ class VError(Exception):
 
 
 def v_id(x):
-    if not isinstance(x, str) or not RE_ID.match(x):
-        raise VError(f"id 不合规（只允许小写字母数字与 - _，且不以 - _ 开头）：{x!r}。"
+    # id 是目录名，不是包名 —— R 包 GO.db / org.Hs.eg.db 的 mod id 写成
+    # 小写的 go.db / org.hs.eg.db，真实包名放在 install.pkg 里。
+    # 首字符必须小写字母数字这一条，本身就排除了 "." 与 ".."。
+    if not isinstance(x, str) or not RE_ID.match(x) or ".." in x:
+        raise VError(f"id 不合规（小写字母数字与 - _ .，首字符须为小写字母数字）：{x!r}。"
+                     f"id 是目录名，真实包名放 install.pkg。"
                      f"拒绝 '..' 与路径分隔符是为了防止目录名逃逸出 skill 树。")
     return x
 
@@ -823,10 +831,13 @@ def build_commands(mod, cfg, pkg_root):
             "why": f"源码包（GitHub 拉下来的）-> {env}",
         })
     elif t == "rpkg":
-        # 先按 CRAN 装；装不上且 BiocManager 在，就转 Bioconductor。
-        # limma / clusterProfiler / fgsea 这些都不在 CRAN 上，早期写法会直接失败。
-        # 末尾用 requireNamespace 兜底并 stop()，否则 Rscript 仍是 exit 0，
-        # 失败会被当成装好了。
+        # 顺序很重要：先问 BiocManager 这个包在不在 Bioconductor 仓库，
+        # 在就走 Bioc（limma / clusterProfiler / GO.db 这些 CRAN 根本没有，
+        # 早期「先 CRAN」的写法要为每个包先空跑一次失败）。
+        # 走 Bioc 时 dependencies=NA 会连带装依赖，且 R 4.6 有预编译二进制，
+        # 不需要 Rtools —— 这一点实测过，别再让用户去装 Rtools。
+        # 末尾统一 requireNamespace 兜底并 stop()：Rscript 装失败仍是 exit 0，
+        # 不看这一句就会把失败当成装好了。
         src = _src(cfg)
         cmds.append({
             "phase": "activate", "kind": "r",
@@ -834,21 +845,42 @@ def build_commands(mod, cfg, pkg_root):
                      f'pkg <- "{inst["pkg"]}"\n'
                      f'{sources.bioc_options(src)}\n'
                      f'repos <- {sources.cran_repos(src)}\n'
-                     'install.packages(pkg, lib = lib, repos = repos,\n'
-                     '                 dependencies = NA, type = "binary")\n'
-                     'if (!requireNamespace(pkg, lib.loc = lib, quietly = TRUE)) {\n'
-                     '  cat("CRAN 没有 ", pkg, "，转 Bioconductor\\n", sep = "")\n'
-                     '  if (!requireNamespace("BiocManager", quietly = TRUE)) {\n'
-                     '    install.packages("BiocManager", lib = lib, repos = repos)\n'
+                     'if ("BiocManager" %in% rownames(installed.packages())) '
+                     'suppressPackageStartupMessages(library(BiocManager))\n'
+                     # 注意：BiocManager::available() **不是**「Bioconductor 有哪些包」，
+                     # 它把 CRAN 一起算进来（实测 29474 个，连 drc、a11yShiny 都在），
+                     # 拿它判断会几乎总是真。正确的口径是只问 Bioc 的那 5 个仓库
+                     # （去掉里面的 CRAN 项），实测 3781 个包。
+                     'in_bioc <- tryCatch({\n'
+                     '  if (!requireNamespace("BiocManager", quietly = TRUE)) FALSE else {\n'
+                     '    br <- BiocManager::repositories()\n'
+                     '    br <- br[setdiff(names(br), "CRAN")]\n'
+                     '    ap <- suppressWarnings(available.packages(repos = br))\n'
+                     '    pkg %in% rownames(ap)\n'
                      '  }\n'
+                     '}, error = function(e) FALSE)\n'
+                     'if (in_bioc) {\n'
+                     '  cat("在 Bioconductor 上，走 BiocManager\\n")\n'
                      '  BiocManager::install(pkg, lib = lib, ask = FALSE,\n'
                      '                       update = FALSE, type = "binary")\n'
+                     '} else {\n'
+                     '  cat("走 CRAN\\n")\n'
+                     '  install.packages(pkg, lib = lib, repos = repos,\n'
+                     '                   dependencies = NA, type = "binary")\n'
                      '}\n'
-                     'if (!requireNamespace(pkg, lib.loc = lib, quietly = TRUE)) {\n'
+                     'ok <- requireNamespace(pkg, lib.loc = lib, quietly = TRUE)\n'
+                     'if (!ok && in_bioc) {\n'
+                     '  # 极少数情况下 available() 结果与镜像不一致，退回 CRAN 再试一次\n'
+                     '  cat("Bioc 没装上，退回 CRAN 再试\\n")\n'
+                     '  install.packages(pkg, lib = lib, repos = repos,\n'
+                     '                   dependencies = NA, type = "binary")\n'
+                     '  ok <- requireNamespace(pkg, lib.loc = lib, quietly = TRUE)\n'
+                     '}\n'
+                     'if (!ok) {\n'
                      '  stop("安装失败：", pkg, "（CRAN 与 Bioconductor 都没装上）")\n'
                      '}\n'
                      'cat("ok\\n")'),
-            "why": f"R 包 {inst['pkg']}（先 CRAN，失败转 Bioconductor）-> {cfg['r_lib']}",
+            "why": f"R 包 {inst['pkg']}（Bioconductor 优先，其次 CRAN）-> {cfg['r_lib']}",
         })
     elif t == "rgh":
         cmds.append({
@@ -1820,7 +1852,7 @@ def _introspect(mod, cfg, state):
     return ("代码在位（实测列目录，相对 vendor/src）", "\n".join(lines[:80]))
 
 
-def cmd_verify(cfg, args, write_docs=False):
+def cmd_verify(cfg, args, write_docs=False, strict=False):
     state = load_state(cfg)
     ids = [v_id(a) for a in args if not a.startswith("--")] or list_mod_ids()
     if not ids:
@@ -1831,19 +1863,26 @@ def cmd_verify(cfg, args, write_docs=False):
         mod = load_mod(mid)
         if mod is None:
             continue
-        # 只有「装载过」的 mod 才参与体检。清单已在 mods/ 里但没 install 的，
-        # 属于「可选、还没装」，判 FAIL 会让 check_envs 在干净机器上误报。
+        # 判断「装没装」以**实测**为准，不信 phase 标记。
+        # 早期写法只看 phase：标记缺失/为假时直接 SKIP 而不探测，
+        # 于是 WGCNA 明明 library() 得起来、却显示「待装」且 verify 永远 SKIP，
+        # 而且 SKIP 的退出码也是 0，很容易被当成 PASS 蒙过去。
+        # 现在顺序是：先探测；探测成功即 PASS 并顺手把 phase 补正；
+        # 只有探测失败、且确实没装载过，才算「未装载」SKIP。
         st = state["mods"].get(mid) or {}
-        if not (st.get("phase", {}).get("fetched") or st.get("phase", {}).get("activated")):
-            results.append({"probe": mid, "ok": None, "core": False,
-                            "detail": "未装载（清单已就位，install 后才校验）", "fix": None})
-            print(f"[{i:2}/{len(ids)}] {mid:<22} SKIP 未装载（清单已就位）")
-            continue
+        tried = bool(st.get("phase", {}).get("fetched")
+                     or st.get("phase", {}).get("activated"))
         try:
             validate_mod(mod, cfg)
             ok, detail, fix = verify_present(mod, cfg, state)
         except VError as exc:
             ok, detail, fix = False, f"清单不合规：{exc}", None
+        if ok is not True and not tried:
+            results.append({"probe": mid, "ok": None, "core": False,
+                            "detail": "未装载（清单已就位，install 后才校验）",
+                            "fix": None})
+            print(f"[{i:2}/{len(ids)}] {mid:<22} SKIP 未装载（清单已就位）")
+            continue
         results.append({"probe": mid, "ok": ok, "core": False,
                         "detail": detail, "fix": fix})
         tag = "PASS" if ok else ("SKIP" if ok is None else "FAIL")
@@ -1851,7 +1890,12 @@ def cmd_verify(cfg, args, write_docs=False):
         if fix and ok is not True:
             print(f"{'':<30}fix: {fix}")
         st = state["mods"].setdefault(mid, {})
-        st.setdefault("phase", {"fetched": ok is True, "activated": ok is True})
+        # 只向上自愈：探测证明可用，就把 phase 补成真，下次不必再困惑。
+        # 不要反向覆盖 —— 探测失败不等于「没装过」，抹掉 phase 会让它从体检里消失。
+        if ok is True:
+            st["phase"] = {"fetched": True, "activated": True}
+        else:
+            st.setdefault("phase", {"fetched": False, "activated": False})
         st["verify"] = {"last_run": now_stamp(), "ok": bool(ok), "detail": detail}
         if write_docs and ok:
             got = _introspect(mod, cfg, state)
@@ -1869,10 +1913,18 @@ def cmd_verify(cfg, args, write_docs=False):
                              f"实测写入，非凭记忆）\n\n```\n{blob}\n```\n")
                 print(f"{'':<30}已写入 {d}")
     save_state(cfg, state)
+    n_pass = sum(1 for r in results if r["ok"] is True)
     n_fail = sum(1 for r in results if r["ok"] is False)
+    n_skip = sum(1 for r in results if r["ok"] is None)
     print()
-    print(f"RESULT: {sum(1 for r in results if r['ok'] is True)} PASS / "
-          f"{n_fail} FAIL / {sum(1 for r in results if r['ok'] is None)} SKIP")
+    print(f"RESULT: {n_pass} PASS / {n_fail} FAIL / {n_skip} SKIP")
+    # SKIP 表示「没装过、没校验」，它**不是**通过。
+    # 退出码仍只反映 FAIL，因为 check_envs 用 rc==0 判整体通过，
+    # 干净机器上可选 mod 未装不该算失败。要严格就加 --strict。
+    if n_skip:
+        print(f"        （其中 {n_skip} 个 SKIP 是未装载、未校验，不等于通过）")
+    if strict and n_skip:
+        return 1
     return 1 if n_fail else 0
 
 
@@ -2586,7 +2638,8 @@ USAGE = """sci-figure-kit mod 加载器
   mod.py show <id>                  打印清单与文档
   mod.py add <github-url>           探测仓库 → 生成清单草稿（不安装）
   mod.py install <id> [--yes] [--dry-run]
-  mod.py verify [<id>...] [--write-docs]
+  mod.py verify [<id>...] [--write-docs] [--strict]
+                                    --strict：SKIP（未装载、未校验）也算失败
   mod.py update [<id>...] [--check] [--yes]    检查/应用 mod 更新
   mod.py remove <id> [--yes] [--purge]
   mod.py disable <id> [<id>...]     软关闭：从索引与路由表里摘掉，不卸载
@@ -2655,7 +2708,8 @@ def main():
                                dry_run="--dry-run" in flags,
                                full_fetch="--full-fetch" in flags)
         if cmd == "verify":
-            return cmd_verify(cfg, rest, write_docs="--write-docs" in flags)
+            return cmd_verify(cfg, rest, write_docs="--write-docs" in flags,
+                              strict="--strict" in flags)
         if cmd == "update":
             return cmd_update(cfg, rest, check_only="--check" in flags,
                               assume_yes="--yes" in flags)

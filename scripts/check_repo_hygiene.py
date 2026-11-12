@@ -122,7 +122,31 @@ def check_root_is_configurable() -> list[str]:
         return ["bootstrap.py --dry-run 没有任何输出（子进程异常或输出被吞）"]
     if probe.replace("\\", "/") not in out.replace("\\", "/"):
         return ["bootstrap.py 没有按 SCI_FIG_ROOT 布局安装路径（写死了根目录？）"]
-    leaked = [ln.strip() for ln in out.splitlines() if "D:/app" in ln.replace("\\", "/")]
+    # 只查「安装布局」里的写死路径，**不要查解释器自身路径**。
+    #
+    # 踩过的坑：bootstrap.py 的 pick_base_python() 会返回 sys.executable，
+    # 然后把它打印出来（"用 <解释器> 建 venv"）。如果用 D:\app\envs\figkit\
+    # 的 python 跑这个检查，那行输出里就带 D:/app —— 于是**检查器把自己的
+    # 解释器路径当成了仓库里的写死路径**，报出「bootstrap.py 输出里还有写死的
+    # D:/app」，把排查引向完全错误的方向（实测确有此假阳性）。
+    # 判据：解释器路径是运行环境事实，不是仓库内容，必须排除。
+    interpreter_paths = {
+        sys.executable.replace("\\", "/").lower(),
+        os.path.abspath(sys.executable).replace("\\", "/").lower(),
+    }
+    leaked = []
+    for ln in out.splitlines():
+        norm = ln.replace("\\", "/")
+        if "D:/app" not in norm:
+            continue
+        low = norm.lower()
+        # 含（或用到的）解释器路径 → 运行环境，不是泄漏
+        if any(ip and ip in low for ip in interpreter_paths):
+            continue
+        # "用 ... 建 venv" 是解释器的说明行，同样排除
+        if "建 venv" in norm or "venv：" in norm:
+            continue
+        leaked.append(ln.strip())
     if leaked:
         return ["bootstrap.py 输出里还有写死的 D:/app：" + leaked[0][:120]]
     return []

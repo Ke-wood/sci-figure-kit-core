@@ -70,9 +70,6 @@ function kitScripts() {
   return join(kitRoot(), 'scripts')
 }
 
-const KIT = resolveKit()
-const KIT_SCRIPTS = join(KIT, 'scripts')
-
 /** Workbench projects root: explicit env var, else SCI_FIG_ROOT layout, else undefined. */
 function resolveProjects() {
   if (process.env.SCI_FIG_PROJECTS) return process.env.SCI_FIG_PROJECTS
@@ -187,7 +184,7 @@ function validateTemplate(value) {
 
 function listTemplates() {
   const out = []
-  const modsDir = join(KIT, 'mods')
+  const modsDir = join(kitRoot(), 'mods')
   if (!existsSync(modsDir)) return out
   for (const id of readdirSync(modsDir)) {
     const dir = join(modsDir, id, 'templates')
@@ -222,7 +219,7 @@ function listProjects() {
 }
 
 async function actionStatus() {
-  const script = join(KIT_SCRIPTS, 'check_envs.py')
+  const script = join(kitScripts(), 'check_envs.py')
   const res = await runPython([script, '--json'], 600000)
   const parsed = parseJson(res.stdout)
   if (!parsed || !Array.isArray(parsed.results)) {
@@ -240,7 +237,7 @@ async function actionStatus() {
 }
 
 async function actionMods() {
-  const script = join(KIT_SCRIPTS, 'mod.py')
+  const script = join(kitScripts(), 'mod.py')
   const res = await runPython([script, 'verify'], 600000)
   const text = tail(res.stdout + (res.stderr ? `\n${res.stderr}` : ''))
   return {
@@ -275,7 +272,7 @@ async function actionNew(args) {
   if (!args.data && !args.template) throw new Error('new 至少需要 data 或 template 之一。')
   if (args.preset && !PRESETS.includes(args.preset)) throw new Error(`preset 只能是 ${PRESETS.join(' / ')}。`)
 
-  const script = join(KIT_SCRIPTS, 'workbench.py')
+  const script = join(kitScripts(), 'workbench.py')
   const cmd = [script, 'new', args.name]
   if (args.data) cmd.push('--data', validateData(args.data))
   if (args.template) cmd.push('--from', validateTemplate(args.template))
@@ -292,7 +289,7 @@ async function actionNew(args) {
 
 async function actionRender(args) {
   const project = resolveProject(args.project)
-  const script = join(KIT_SCRIPTS, 'workbench.py')
+  const script = join(kitScripts(), 'workbench.py')
   const res = await runPython([script, 'render', project, '--json'], 600000)
   const envelope = parseJson(res.stdout)
   const text = tail(res.stdout + (res.stderr ? `\n${res.stderr}` : ''))
@@ -312,7 +309,7 @@ async function actionRender(args) {
 
 async function actionReport(args) {
   const project = resolveProject(args.project)
-  const script = join(KIT_SCRIPTS, 'workbench.py')
+  const script = join(kitScripts(), 'workbench.py')
   const res = await runPython([script, 'report', project, '--no-open'], 300000)
   const text = tail(res.stdout + (res.stderr ? `\n${res.stderr}` : ''))
   return {
@@ -388,7 +385,7 @@ function readJsonBody(req) {
 }
 
 async function modsStatus() {
-  const res = await runPython([join(KIT_SCRIPTS, 'mod.py'), 'status', '--json'], 180000)
+  const res = await runPython([join(kitScripts(), 'mod.py'), 'status', '--json'], 180000)
   const parsed = parseJson(res.stdout)
   if (!parsed) {
     return {
@@ -416,7 +413,7 @@ async function modOp(action, id) {
     return { ok: false, action, id, error: `没有这个 mod：${id}` }
   }
 
-  const args = [join(KIT_SCRIPTS, 'mod.py'), spec.verb, id].concat(spec.extra || [])
+  const args = [join(kitScripts(), 'mod.py'), spec.verb, id].concat(spec.extra || [])
   const res = await runPython(args, spec.timeoutMs)
   return {
     ok: res.ok,

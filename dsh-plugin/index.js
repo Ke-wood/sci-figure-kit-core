@@ -437,7 +437,8 @@ async function modsStatus() {
 async function modOp(action, id) {
   const spec = MOD_OPS[action]
   if (!spec) throw new Error(`未知 action：${action}`)
-  if (typeof id !== 'string' || !MOD_ID_RE.test(id)) throw new Error(`mod id 不合法：${id}`)
+  if (typeof id !== 'string' || !MOD_ID_RE.test(id) || id.includes('..'))
+    throw new Error(`mod id 不合法：${id}`)
 
   // Refuse ids that are not actually known — a typo should fail here, not
   // become an argv element that mod.py has to interpret.

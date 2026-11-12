@@ -10,6 +10,7 @@ CI 与本地提交前都应通过。
 from __future__ import annotations
 
 import json
+import locale
 import os
 import re
 import subprocess
@@ -18,7 +19,10 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-TEXT_EXT = {".md", ".py", ".sh", ".json", ".yml", ".yaml", ".txt", ".ps1", ".R"}
+# .js / .css / .svg 也要扫：面板插件（dsh-plugin/）就是由这些文件组成的，
+# 漏掉它们等于对最可能写进本机路径的地方完全没设防。
+TEXT_EXT = {".md", ".py", ".sh", ".json", ".yml", ".yaml", ".txt", ".ps1", ".R",
+            ".js", ".mjs", ".cjs", ".css", ".svg", ".html"}
 SKIP_DIRS = {"__pycache__", ".git", "node_modules", ".venv"}
 
 # 作者本机路径 / 用户名
@@ -79,7 +83,14 @@ def check_sources_module() -> list[str]:
 
 
 def check_root_is_configurable() -> list[str]:
-    """把 SCI_FIG_ROOT 指到临时目录跑 dry-run，输出里不许再出现别的根目录。"""
+    """把 SCI_FIG_ROOT 指到临时目录跑 dry-run，输出里不许再出现别的根目录。
+
+    **必须按字节抓、自己容错解码。** 用 `text=True` 时 subprocess 会按系统
+    代码页（Windows 上是 GBK）解码子进程输出；一旦子进程吐出 UTF-8 的
+    bootstrap 正文，读线程就抛 UnicodeDecodeError，`proc.stdout` 变成 None，
+    下面「probe 不在输出里」的判断随即成立 —— 于是**编码错误被报成
+    「写死了根目录」**，把排查引到完全错误的方向。这个误诊真发生过。
+    """
     probe = os.path.join(tempfile.gettempdir(), "sci_fig_hygiene_root")
     env = dict(os.environ, SCI_FIG_ROOT=probe)
     env.pop("SCI_FIG_ENVS", None)
@@ -87,13 +98,28 @@ def check_root_is_configurable() -> list[str]:
         proc = subprocess.run(
             [sys.executable, os.path.join(ROOT, "install", "bootstrap.py"),
              "--dry-run", "--only", "figkit", "--source", "official"],
-            capture_output=True, text=True, timeout=180, env=env)
+            capture_output=True, timeout=180, env=env)
     except Exception as exc:  # noqa: BLE001
         return [f"bootstrap.py --dry-run 跑不起来：{exc}"]
 
-    out = (proc.stdout or "") + (proc.stderr or "")
+    def decode(raw) -> str:
+        if not raw:
+            return ""
+        # 先按 UTF-8 试，再退回系统代码页；两者都用 replace 兜底，
+        # 宁可显示几个替换符，也不让检查本身崩掉。
+        for enc in ("utf-8", locale.getpreferredencoding(False)):
+            try:
+                return raw.decode(enc)
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return raw.decode("utf-8", errors="replace")
+
+    out = decode(proc.stdout) + decode(proc.stderr)
     if proc.returncode != 0:
         return [f"bootstrap.py --dry-run 退出码 {proc.returncode}：{out[-400:]}"]
+    if not out.strip():
+        # 和「路径写死」分开报：没输出是子进程/环境问题，不是配置泄漏。
+        return ["bootstrap.py --dry-run 没有任何输出（子进程异常或输出被吞）"]
     if probe.replace("\\", "/") not in out.replace("\\", "/"):
         return ["bootstrap.py 没有按 SCI_FIG_ROOT 布局安装路径（写死了根目录？）"]
     leaked = [ln.strip() for ln in out.splitlines() if "D:/app" in ln.replace("\\", "/")]

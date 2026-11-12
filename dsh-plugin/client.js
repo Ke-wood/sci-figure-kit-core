@@ -56,6 +56,16 @@ window.__ModuleLoader__.load({
         srcLocal: '本机自写',
         srcGithub: 'GitHub',
         modsFrom: '来自 mods/_catalog.json 与 mod.py status',
+        interfaces: '接口',
+        interfacesIntro: 'Prism / SPSS 能被脚本调用的全部接口。标「可用」的是本机实测跑通的；标「不可用」的是实测确认此路不通，别再试。',
+        ifaceAvailable: '可用',
+        ifaceUnavailable: '不可用',
+        ifaceUnverified: '未验证',
+        ifaceWarning: '有坑',
+        ifaceCmd: '复制命令',
+        ifaceUsage: '什么时候用',
+        ifaceEvidence: '证据',
+        filterAll: '全部',
       },
       en: {
         panelLabel: 'Figures',
@@ -102,6 +112,16 @@ window.__ModuleLoader__.load({
         srcLocal: 'local',
         srcGithub: 'GitHub',
         modsFrom: 'from mods/_catalog.json and mod.py status',
+        interfaces: 'Interfaces',
+        interfacesIntro: 'Every Prism / SPSS interface a script can drive. "Available" means it actually ran on this machine; "Unavailable" means it was tested and does not work — do not retry.',
+        ifaceAvailable: 'works',
+        ifaceUnavailable: 'no',
+        ifaceUnverified: 'untested',
+        ifaceWarning: 'gotcha',
+        ifaceCmd: 'Copy command',
+        ifaceUsage: 'When to use',
+        ifaceEvidence: 'Evidence',
+        filterAll: 'All',
       },
     }
 
@@ -407,6 +427,156 @@ window.__ModuleLoader__.load({
       { id: 'rdbu', name: 'RdBu（发散）', note: 'z-score / log2FC：零点必须是中间色', stops: ['#67001f', '#d6604d', '#f7f7f7', '#4393c3', '#053061'] },
     ]
 
+    /* -----------------------------------------------------------------------
+     * 软件接口清单（Prism / SPSS）
+     *
+     * 状态纪律：status 只有三种，且每条都能追到证据。
+     *   ok   = 本机实测跑通过（有产物/有数值）
+     *   no   = 本机实测确认不可用（别再试，试了会挂死或静默失败）
+     *   todo = 未验证（文档提到但没实测，不要当承诺）
+     * 「坑」是必读的，不是备注 —— 这些坑会导致挂死或静默出错。
+     * ----------------------------------------------------------------------- */
+    const INTERFACES = [
+      {
+        id: 'prism', name: 'GraphPad Prism', version: '10.6.1',
+        note: '只做分析、不出图：图样式存在二进制里，脚本改不了。出图交给 cnsplots / ggplot2。',
+        entries: [
+          {
+            name: '.pzc 脚本', status: 'ok',
+            usage: '唯一可用的调用入口。所有 Prism 自动化都从这里走。',
+            cmd: '& \'<PRISM_DIR>\\prism.exe\' \'@<WORKDIR>\\job.pzc\'',
+            evidence: '实测：7 组 ANOVA 的 F=70.0、p=4.97e-18，与 scipy+statsmodels 完全一致',
+            gotchas: [
+              '@ 后的路径必须传原生反斜杠（os.path.normpath）；用正斜杠会弹「文件无法打开」然后静默退出 rc=0',
+              '脚本最后一行必须是 Exit，否则模态框永久挂死',
+              '.pzc 按系统 ANSI（GBK）写，不能 UTF-8',
+              '脚本与工作目录必须纯 ASCII',
+            ],
+          },
+          {
+            name: '.prism 工程文件', status: 'ok',
+            usage: '模板与结果都在这。导入数据 → RecalcAll → Save → 解包读 results.json。',
+            cmd: 'python "<skill>/mods/prism/templates/prism_analyze.py" --template oneway.prism --data panel.csv --out results',
+            evidence: '实测：解包 .prism（zip）拿到 results.json，CLD 字母与 15/21 显著数均与 statsmodels 一致',
+            gotchas: [
+              'Import 用的是「按位置」导入：CSV 无表头、列数必须等于模板表的列数',
+              'GoTo R n 的结果表编号推不出来，某些 view 报 No such sheet! 并挂死 —— 直接读 results.json',
+            ],
+          },
+          {
+            name: 'results.json 通用取数', status: 'ok',
+            usage: '任何分析类型都能把数值叶子倒出来，不必按分析类型改代码。',
+            cmd: 'python "<skill>/mods/prism/templates/prism_results.py" --results results.json --find "pValue"',
+            evidence: '递归遍历整棵树，按 path 定位；--list 先摸结构，--tsv/--json 全量导出',
+            gotchas: ['results.json 是 Save 之后才写进 .prism 的，模板本身里没有'],
+          },
+          {
+            name: 'ANOVA + Tukey/Dunnett/Dunn', status: 'ok',
+            usage: '要显著性字母（CLD）时用它 —— SPSS 27 拿不到这三个事后检验。',
+            cmd: 'python "<skill>/mods/prism/templates/prism_analyze.py" --template oneway.prism --data panel.csv --out results',
+            evidence: '实测产物：anova.csv / posthoc.csv / letters.csv / results.json',
+            gotchas: ['参数锁在模板里，换数据不用改行数，但列数要一致'],
+          },
+          {
+            name: 'COM / OLE 自动化', status: 'no',
+            usage: '不可用，别再试。',
+            cmd: '',
+            evidence: '实测：没有 IDispatch / TypeLib，Prism.Command 的 LocalServer32 是空的',
+            gotchas: [],
+          },
+          {
+            name: '图样式脚本化', status: 'no',
+            usage: '不可用。字体、柱形、误差棒、图例都在二进制里。',
+            cmd: '',
+            evidence: '实测：脚本无对应命令；只能靠模板预先配好样式',
+            gotchas: [],
+          },
+        ],
+      },
+      {
+        id: 'spss', name: 'IBM SPSS Statistics', version: '27.0.1',
+        note: '无人值守只能走生产作业或进程内 Python。绝不能 stats.exe foo.sps（弹 GUI 挂死）。',
+        entries: [
+          {
+            name: '生产作业（-production silent）', status: 'ok',
+            usage: '无人值守、批量、结果落 OXML 的标准路径。',
+            cmd: '& \'<SPSS_DIR>\\stats.exe\' -production silent \'<WORKDIR>\\job.spj\'',
+            evidence: '实测：DESCRIPTIVES 产出 OXML，number="13.833333333333" 与源表一致',
+            gotchas: [
+              '.spj 里必须写 <syntax syntaxPath="..."/> 属性；写成元素文本会「作业成功」但零产物',
+              '<output> 必须在 <syntax> 之前',
+              '语法错时 SPSS 仍 exit 0，错误只在日志里 —— 要看日志不看退出码',
+              '产物路径纯 ASCII，中文目录会静默不生成',
+              'OXML 可能只写一半，解析前校验 </outputTree>',
+            ],
+          },
+          {
+            name: '进程内 Python（spss / spssdata）', status: 'ok',
+            usage: '要直接读数、要快、要异常可见时优先用它 —— 比 OXML 好用。',
+            cmd: '& \'<SPSS_DIR>\\Python3\\python.exe\' "<skill>/mods/spss/templates/spss_py.py" --sps analysis.sps --table agg.csv --out results',
+            evidence: '实测：AGGREGATE 后读回 A=12.466666666666669、B=15.2，与源表一致',
+            gotchas: ['字符串变量按声明宽度补齐（A8 读出来是 "A       "），落 CSV 前 .strip()'],
+          },
+          {
+            name: 'PROBIT（LC50 / 概率单位）', status: 'ok',
+            usage: '急性毒性求 LC50 与置信区间 —— 这是 SPSS 相对 Prism 的独有价值。',
+            cmd: 'PROBIT deaths OF total WITH dose /MODEL=PROBIT /PRINT=CI.',
+            evidence: '实测：/PRINT=CI 时 OXML 里 Confidence Limits 表直接给 LC50 与 95% CI（读 number 属性）',
+            gotchas: [
+              '连续剂量用 WITH，别用 BY',
+              '/PRINT=CI 不能省：写成 NONE 会把 Confidence Limits 表一起关掉 —— 旧文档误以为「PROBIT 不进 OXML」，其实自己把表关了',
+            ],
+          },
+          {
+            name: 'OXML 取数', status: 'ok',
+            usage: '把 pivotTable 倒成 tidy 表，不用每次手抠维度。',
+            cmd: 'python "<skill>/mods/spss/templates/spss_ooxml.py" --list out.xml',
+            evidence: '解析四类表：Confidence Limits / ChiSquareTests / Parameter Estimates / Cell Counts and Residuals',
+            gotchas: [
+              '每格有 number（全精度）与 text（显示值、已舍入）—— 要数字必须读 number',
+              '缺失值 number 为空、text 可能是 "." —— 要落 None，不能当 0',
+              '残缺 OXML 当硬错误，别返回空表冒充成功',
+            ],
+          },
+          {
+            name: 'MIXED / 简单效应 / KW', status: 'ok',
+            usage: '混合模型、双因素简单效应、Kruskal-Wallis。',
+            cmd: 'MIXED y BY time /FIXED=time | SSTYPE(3) /RANDOM=INTERCEPT | SUBJECT(id) COVTYPE(VC) /METHOD=REML.',
+            evidence: '语法齐全（reference/commands.md 60 条）',
+            gotchas: ['KW 的 H 与 scipy 逐位一致，不会像 Prism 那样挂死'],
+          },
+          {
+            name: 'Tukey / Dunnett / Dunn', status: 'no',
+            usage: 'SPSS 27 拿不到这三种事后检验，走 prism mod。',
+            cmd: '',
+            evidence: '实测：ADJ() 只有 Bonferroni / LSD / Šidák',
+            gotchas: [],
+          },
+          {
+            name: '显著性字母（CLD）', status: 'no',
+            usage: 'SPSS 无原生输出，要自己按对比结果算；直接走 prism mod。',
+            cmd: '',
+            evidence: '实测：无对应过程',
+            gotchas: [],
+          },
+          {
+            name: 'COM（SPSS.Application16）', status: 'todo',
+            usage: 'Excel/VBA 驱动才需要；本机 Python 没装 pywin32。',
+            cmd: '',
+            evidence: 'ProgID 已注册，但未装 pywin32，未跑通',
+            gotchas: [],
+          },
+          {
+            name: 'R 集成（RConsole / rcommute）', status: 'todo',
+            usage: 'SPSS 调 R 或 R 调 SPSS；本机 R 独立可跑，绕这层没收益。',
+            cmd: '',
+            evidence: '未验证',
+            gotchas: [],
+          },
+        ],
+      },
+    ]
+
     function safeTranslate(ctx) {
       const dict = DICT.zh
       try {
@@ -564,6 +734,7 @@ window.__ModuleLoader__.load({
         const tabs = [['all', t('all')]]
           .concat(FOLDERS.map((f) => [f.id, f.name]))
           .concat([['palette', t('palette')]])
+          .concat([['interfaces', t('interfaces')]])
           .concat([['mods', t('mods')]])
 
         const card = (item) => {
@@ -843,6 +1014,65 @@ window.__ModuleLoader__.load({
             group(t('candidateGroup'), candidates))
         }
 
+        const STATUS_COLOR = {
+          ok: { fg: '#2f9e44', bg: 'transparent' },
+          no: { fg: '#e03131', bg: 'transparent' },
+          todo: { fg: 'var(--dsw-alias-label-secondary)', bg: 'transparent' },
+        }
+
+        const interfacesView = () => {
+          const total = INTERFACES.reduce((n, g) => n + g.entries.length, 0)
+          return h('div', { style: { display: 'grid', gap: 14 } },
+            h('div', { style: S.card },
+              h('div', { style: T.cardHead },
+                h('span', { style: T.cardTitle }, t('interfaces')),
+                h('span', { style: S.chip }, `${total} 条`)),
+              h('div', { style: T.when }, t('interfacesIntro')),
+              h('div', { style: { display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12 } },
+                h('span', { style: { color: '#2f9e44' } }, `● ${t('ifaceAvailable')}`),
+                h('span', { style: { color: '#e03131' } }, `● ${t('ifaceUnavailable')}`),
+                h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, `○ ${t('ifaceUnverified')}`))),
+            INTERFACES.map((group) => h('div', { key: group.id, style: { display: 'grid', gap: 10 } },
+              h('div', { style: { fontSize: 13, fontWeight: 600, marginTop: 6 } },
+                `${group.name}  ·  ${group.version}`),
+              h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', lineHeight: 1.55 } },
+                group.note),
+              h('div', { style: S.grid },
+                group.entries.map((e) => {
+                  const col = STATUS_COLOR[e.status] || STATUS_COLOR.todo
+                  const label = e.status === 'ok' ? t('ifaceAvailable')
+                    : (e.status === 'no' ? t('ifaceUnavailable') : t('ifaceUnverified'))
+                  return h('div', { key: e.name, style: S.card },
+                    h('div', { style: T.cardHead },
+                      h('span', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+                        h('span', { style: { color: col.fg, fontSize: 12 } }, '●'),
+                        h('span', { style: T.cardTitle }, e.name)),
+                      h('span', { style: Object.assign({}, S.chip, { color: col.fg, borderColor: col.fg }) }, label)),
+                    h('div', { style: T.when }, e.usage),
+                    e.evidence
+                      ? h('div', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)', lineHeight: 1.5 } },
+                        `${t('ifaceEvidence')}：${e.evidence}`)
+                      : null,
+                    e.gotchas && e.gotchas.length
+                      ? h('div', {
+                        style: {
+                          borderLeft: '3px solid #e8590c', paddingLeft: 8,
+                          fontSize: 11.5, lineHeight: 1.55, color: 'var(--dsw-alias-label-secondary)',
+                        },
+                      },
+                      h('div', { style: { color: '#e8590c', fontWeight: 600, marginBottom: 2 } }, t('ifaceWarning')),
+                      e.gotchas.map((g, i) => h('div', { key: i }, '· ' + g)))
+                      : null,
+                    e.cmd
+                      ? h('pre', { style: S.preview }, e.cmd)
+                      : null,
+                    e.cmd
+                      ? h('div', { style: S.actions },
+                        h('button', { type: 'button', style: S.btn, onClick: (ev) => copyText(ev, e.cmd, t) }, t('ifaceCmd')))
+                      : null)
+                })))))
+        }
+
         return h('div', { style: S.page },
           h('div', { style: S.header }, h('span', { style: S.mark }, h(PanelIcon, { size: 20 })), h('h1', { style: S.title }, t('title'))),
           h('p', { style: S.subtitle }, t('subtitle')),
@@ -853,10 +1083,15 @@ window.__ModuleLoader__.load({
               onClick: () => setTab(id),
             }, label)),
             h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)', marginLeft: 4 } },
-              (tab === 'palette' || tab === 'mods') ? '' : items.length + ' ' + t('items'))),
+              (tab === 'palette' || tab === 'mods' || tab === 'interfaces')
+                ? '' : items.length + ' ' + t('items'))),
           tab === 'palette'
             ? paletteView()
-            : (tab === 'mods' ? modsView() : h('div', { style: S.grid }, items.map(card))),
+            : (tab === 'mods'
+              ? modsView()
+              : (tab === 'interfaces'
+                ? interfacesView()
+                : h('div', { style: S.grid }, items.map(card)))),
           h('p', { style: S.note }, t('note')))
       }
     }

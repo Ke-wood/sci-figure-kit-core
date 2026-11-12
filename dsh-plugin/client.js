@@ -57,6 +57,7 @@ window.__ModuleLoader__.load({
         srcGithub: 'GitHub',
         modsFrom: '来自 mods/_catalog.json 与 mod.py status',
         interfaces: '接口',
+        softwareRecipes: '可复制的配方',
         interfacesIntro: 'Prism / SPSS 能被脚本调用的全部接口。标「可用」的是本机实测跑通的；标「不可用」的是实测确认此路不通，别再试。',
         ifaceAvailable: '可用',
         ifaceUnavailable: '不可用',
@@ -113,6 +114,7 @@ window.__ModuleLoader__.load({
         srcGithub: 'GitHub',
         modsFrom: 'from mods/_catalog.json and mod.py status',
         interfaces: 'Interfaces',
+        softwareRecipes: 'Copy-ready recipes',
         interfacesIntro: 'Every Prism / SPSS interface a script can drive. "Available" means it actually ran on this machine; "Unavailable" means it was tested and does not work — do not retry.',
         ifaceAvailable: 'works',
         ifaceUnavailable: 'no',
@@ -331,7 +333,7 @@ window.__ModuleLoader__.load({
       {
         id: 'software',
         name: '软件',
-        desc: 'Prism / SPSS 的无人值守调用',
+        desc: 'Prism / SPSS：配方 + 能力边界清单',
         extra: 'Prism ≈70 条脚本命令 · SPSS 328 条语法命令',
         items: [
           {
@@ -731,10 +733,11 @@ window.__ModuleLoader__.load({
         const setParam = (item, key, value) =>
           setValues((prev) => Object.assign({}, prev, { [item.id + ':' + key]: value }))
 
+        // 「软件」页同时承载 Prism/SPSS 的配方与接口清单，所以不再单列一个
+        // 「接口」标签 —— 两者本来就是同一件事的两种粒度（怎么调 / 能调什么）。
         const tabs = [['all', t('all')]]
           .concat(FOLDERS.map((f) => [f.id, f.name]))
           .concat([['palette', t('palette')]])
-          .concat([['interfaces', t('interfaces')]])
           .concat([['mods', t('mods')]])
 
         const card = (item) => {
@@ -1083,14 +1086,20 @@ window.__ModuleLoader__.load({
               onClick: () => setTab(id),
             }, label)),
             h('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-label-secondary)', marginLeft: 4 } },
-              (tab === 'palette' || tab === 'mods' || tab === 'interfaces')
-                ? '' : items.length + ' ' + t('items'))),
+              (tab === 'palette' || tab === 'mods') ? '' : items.length + ' ' + t('items'))),
           tab === 'palette'
             ? paletteView()
             : (tab === 'mods'
               ? modsView()
-              : (tab === 'interfaces'
-                ? interfacesView()
+              : (tab === 'software'
+                // 软件页：上半是可直接复制的配方，下半是能力边界清单。
+                // 把两者放一起是因为它们回答同一个问题——「Prism/SPSS 我能拿来干什么」。
+                ? h('div', { style: { display: 'grid', gap: 16 } },
+                  h('div', { style: { display: 'grid', gap: 10 } },
+                    h('div', { style: { fontSize: 13, fontWeight: 600 } },
+                      t('softwareRecipes')),
+                    h('div', { style: S.grid }, items.map(card))),
+                  interfacesView())
                 : h('div', { style: S.grid }, items.map(card)))),
           h('p', { style: S.note }, t('note')))
       }

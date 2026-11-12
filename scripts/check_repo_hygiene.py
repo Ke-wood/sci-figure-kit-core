@@ -130,21 +130,26 @@ def check_root_is_configurable() -> list[str]:
     # 解释器路径当成了仓库里的写死路径**，报出「bootstrap.py 输出里还有写死的
     # D:/app」，把排查引向完全错误的方向（实测确有此假阳性）。
     # 判据：解释器路径是运行环境事实，不是仓库内容，必须排除。
-    interpreter_paths = {
-        sys.executable.replace("\\", "/").lower(),
-        os.path.abspath(sys.executable).replace("\\", "/").lower(),
-    }
+    interpreter_paths = [
+        p.replace("\\", "/").lower()
+        for p in (sys.executable, os.path.abspath(sys.executable), os.path.realpath(sys.executable))
+        if p
+    ]
     leaked = []
     for ln in out.splitlines():
         norm = ln.replace("\\", "/")
         if "D:/app" not in norm:
             continue
         low = norm.lower()
-        # 含（或用到的）解释器路径 → 运行环境，不是泄漏
-        if any(ip and ip in low for ip in interpreter_paths):
-            continue
-        # "用 ... 建 venv" 是解释器的说明行，同样排除
-        if "建 venv" in norm or "venv：" in norm:
+        # 把该行里出现的解释器路径**挖掉**，再看还剩不剩 D:/app。
+        # 这样「用 <解释器> 建 venv」这类行会被放过（剩下的部分没有 D:/app），
+        # 而「安装到 D:/app/envs/figkit 用的是 <解释器>」这种真泄漏仍会被抓到
+        # —— 比按关键词整行豁免（"建 venv" 就跳过）更严，不会顺带掩盖真问题。
+        residue = low
+        for ip in interpreter_paths:
+            if ip:
+                residue = residue.replace(ip, "")
+        if "d:/app" not in residue:
             continue
         leaked.append(ln.strip())
     if leaked:

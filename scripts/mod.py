@@ -321,6 +321,24 @@ def save_state(cfg, state):
     os.replace(tmp, p)
 
 
+def mod_enabled(state, mid):
+    """mod 是否启用。
+
+    **enabled 缺省 = true。** 现有 _state.json 里根本没有这个字段，所以这里
+    必须把「没写」当成「启用」—— 否则升级后所有人的 mod 会一起消失。
+
+    只认 False / "false" / 0 / "no" / "off" 为禁用；写错的类型按启用处理，
+    宁可多显示一个 mod，也不要因为一个坏字段把整个索引清空。
+    """
+    st = (state.get("mods") or {}).get(mid) or {}
+    v = st.get("enabled", True)
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "0", "no", "off")
+    if v is None:
+        return True
+    return bool(v)
+
+
 def now_stamp():
     import datetime
     return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -1258,7 +1276,9 @@ def cmd_list(cfg, args):
             continue
         st = state["mods"].get(mid, {})
         if st.get("phase", {}).get("activated") or st.get("phase", {}).get("fetched"):
-            mark = "已装载"
+            # 装了但被软关闭 —— list 里要能看出来，否则「为什么 INDEX.md 里没它」
+            # 会被误判成坏掉。
+            mark = "已装载" if mod_enabled(state, mid) else "已装载·禁用"
         elif mod.get("requires_review"):
             mark = "待确认"
         else:
@@ -1281,8 +1301,13 @@ def cmd_available(cfg, args):
     print("-" * 110)
     for e in cat:
         mid = e.get("id", "?")
-        if mid in state["mods"]:
-            mark = "已装载"
+        st = state["mods"].get(mid) or {}
+        ph = st.get("phase") or {}
+        is_inst = bool(ph.get("fetched") or ph.get("activated"))
+        # 只有真装过才算「已装载」—— disable / enable 会给未装的 id 也写一条
+        # 状态记录，别让那一条把它伪装成装过。
+        if is_inst:
+            mark = "已装载" if mod_enabled(state, mid) else "已装载·禁用"
         elif os.path.isfile(mod_json_path(mid)):
             mark = "有清单待装"
         else:
@@ -1925,18 +1950,192 @@ def cmd_remove(cfg, args, assume_yes=False, purge=False):
     return 0
 
 
+# ---- 软开关：enable / disable / status
+#
+# 和 cmd_remove 的区别（刻意如此）：
+#   remove   = 硬卸载，pip uninstall + 删 vendor 目录，不可逆
+#   disable  = 软关闭，只把 _state.json 里的 enabled 写成 false；
+#              文件一个不删，包一个不卸，随时 enable 回来。
+# 「先关掉看看」是高频需求（配色包冲突、某个 mod 抢路由），不该为此卸载重装。
+
+def _soft_toggle(cfg, args, enabled):
+    if not args:
+        name = "enable" if enabled else "disable"
+        print(f"用法：mod.py {name} <id> [<id> ...]", file=sys.stderr)
+        return 2
+    state = load_state(cfg)
+    changed = []
+    for raw in args:
+        if raw.startswith("--"):
+            continue
+        mid = v_id(raw)
+        mod = load_mod(mid)
+        st = state["mods"].get(mid)
+        if mod is None and not st:
+            print(f"没有这个 mod：{mid}", file=sys.stderr)
+            return 2
+        st = state["mods"].setdefault(mid, {})
+        was = mod_enabled(state, mid)
+        st["enabled"] = bool(enabled)
+        ph = st.get("phase") or {}
+        installed = bool(ph.get("fetched") or ph.get("activated"))
+        if was == bool(enabled):
+            print(f"{mid}：本来就是{'启用' if enabled else '禁用'}状态"
+                  + ("" if installed else "（未装载）"))
+            continue
+        changed.append(mid)
+        print(f"{mid}：{'启用' if enabled else '禁用'}"
+              + ("" if installed else "（注意：该 mod 当前未装载）"))
+    if not changed:
+        return 0
+    save_state(cfg, state)
+    # 状态变了就把两份生成物一起刷新 —— 用户不该再手动跑 index / routes。
+    write_index(cfg)
+    cmd_routes(cfg, [])
+    print(f"已{'启用' if enabled else '禁用'} {len(changed)} 个 mod：{'、'.join(changed)}")
+    return 0
+
+
+def cmd_disable(cfg, args):
+    """把 mod 关掉：从 INDEX.md 与 routing-mods.md 里消失，但文件与安装都留着。"""
+    return _soft_toggle(cfg, args, False)
+
+
+def cmd_enable(cfg, args):
+    """把 mod 重新打开：等价于把 _state.json 里的 enabled 写回 true。"""
+    return _soft_toggle(cfg, args, True)
+
+
+def cmd_status(cfg, args, as_json=False):
+    """一眼看清每个 mod 的 装没装 / 开没开。--json 供脚本与 check_* 用。
+
+    --json 的字段是**给面板和 Host 工具消费的契约**（dsh-sci-figure 的
+    mod 装载页直接读它），所以除了状态还要带上卡片要显示的元信息：
+    name / license / docs / source_*。缺一项面板就得另外拼一次清单，
+    那会在两个地方各解析一遍 mod.json，迟早不一致。
+
+    三档 mod 都要列出来，靠 installed / has_manifest 区分：
+      已装载  installed=true
+      有清单待装  has_manifest=true, installed=false
+      仅候选    两者皆 false（只在 _catalog.json 里登记过）
+    """
+    state = load_state(cfg)
+    catalog = {e.get("id"): e for e in load_catalog() if e.get("id")}
+    # 清单目录、状态文件、目录清单三处各可能多出别人没有的 id，
+    # 取并集才不会漏报（清单被删但状态还在、只在目录里登记过的候选等）。
+    ids = sorted(set(list_mod_ids()) | set(state["mods"].keys()) | set(catalog))
+    items = []
+    for mid in ids:
+        mod = load_mod(mid) or {}
+        st = state["mods"].get(mid) or {}
+        cat = catalog.get(mid) or {}
+        # 清单 > 状态 > 目录，三级兜底：清单最权威，目录只登记来源。
+        src = mod.get("source") or cat.get("source") or {}
+        ph = st.get("phase") or {}
+        resolved = st.get("resolved") or {}
+        installed_at = (st.get("installed") or {}).get("at")
+        ver = st.get("verify") or {}
+        installed = bool(ph.get("fetched") or ph.get("activated"))
+        items.append({
+            "id": mid,
+            "name": mod.get("name") or cat.get("name") or mid,
+            "type": mod.get("type") or st.get("type") or cat.get("type"),
+            "env": mod.get("env") or st.get("env") or cat.get("env"),
+            "purpose": mod.get("purpose") or cat.get("purpose") or "plot",
+            "summary": str(mod.get("summary") or cat.get("summary") or ""),
+            "license": mod.get("license") or cat.get("license"),
+            "installed": installed,
+            "enabled": mod_enabled(state, mid),
+            "has_manifest": bool(mod),
+            "phase": {"fetched": bool(ph.get("fetched")),
+                      "activated": bool(ph.get("activated"))},
+            "verify": {"last_run": ver.get("last_run"),
+                       "ok": ver.get("ok"),
+                       "detail": ver.get("detail")},
+            "verify_ok": ver.get("ok"),
+            "verify_detail": ver.get("detail"),
+            "docs": f"mods/{mid}/{mod.get('docs', 'docs.md')}",
+            "source_kind": src.get("kind"),
+            "source_url": src.get("url"),
+            "installed_at": installed_at,
+            "sha": resolved.get("sha"),
+        })
+
+    if as_json:
+        enabled_n = sum(1 for i in items if i["enabled"])
+        installed_n = sum(1 for i in items if i["installed"])
+        active_n = sum(1 for i in items if i["installed"] and i["enabled"])
+        catalog_n = sum(1 for i in items
+                        if not i["installed"] and not i["has_manifest"])
+        print(json.dumps({
+            "ok": True,
+            "state_path": state_path(cfg),
+            # count 与 summary 同值：count 是面板契约里的名字，
+            # summary 留给人类读的输出，两个都留着免得下游各猜一个。
+            "count": {"total": len(items), "enabled": enabled_n,
+                      "disabled": len(items) - enabled_n,
+                      "installed": installed_n,
+                      "installed_enabled": active_n,
+                      "catalog": catalog_n},
+            "summary": {"total": len(items), "enabled": enabled_n,
+                        "disabled": len(items) - enabled_n,
+                        "installed": installed_n,
+                        "installed_enabled": active_n,
+                        "catalog": catalog_n},
+            "mods": items,
+        }, ensure_ascii=False, indent=2))
+        return 0
+
+    if not items:
+        print("（mods/ 下还没有任何 mod）")
+        return 0
+    print(f"{'id':<24} {'type':<10} {'安装':<10} {'开关':<6} 说明")
+    print("-" * 96)
+    for i in items:
+        if i["installed"]:
+            inst = "已装载"
+        elif i["has_manifest"]:
+            inst = "待装"
+        else:
+            inst = "候选"
+        sw = "启用" if i["enabled"] else "禁用"
+        note = i["summary"]
+        if i["installed"] and not i["has_manifest"]:
+            note = "（清单目录已不在，只剩状态记录）"
+        print(f"{i['id']:<24} {str(i['type'] or '-'):<10} "
+              f"{inst:<10} {sw:<6} {note}")
+    print()
+    print(f"共 {len(items)} 个：启用 {sum(1 for i in items if i['enabled'])} / "
+          f"禁用 {sum(1 for i in items if not i['enabled'])}；"
+          f"已装载 {sum(1 for i in items if i['installed'])} / "
+          f"待装 {sum(1 for i in items if not i['installed'] and i['has_manifest'])} / "
+          f"候选 {sum(1 for i in items if not i['installed'] and not i['has_manifest'])}")
+    print("禁用只影响路由与索引，不卸载、不删文件；"
+          "要真卸掉用 remove，重新打开用 enable。")
+    return 0
+
+
 # ---- index
 
 INDEX_MD = os.path.join(MODS_DIR, "INDEX.md")
 
 
 def _installed_ids(cfg):
+    """已装载且已启用的 mod id。
+
+    **已禁用（enabled=false）的一律不算「装了」** —— 这是软开关的落点：
+    INDEX.md 与 routing-mods.md 都由这条口径驱动，所以 disable 之后它们
+    自然把该 mod 的行去掉，文件一行不删、包也不卸。
+    """
     state = load_state(cfg)
     out = []
     for mid in list_mod_ids():
         ph = (state["mods"].get(mid) or {}).get("phase") or {}
-        if ph.get("fetched") or ph.get("activated"):
-            out.append(mid)
+        if not (ph.get("fetched") or ph.get("activated")):
+            continue
+        if not mod_enabled(state, mid):
+            continue
+        out.append(mid)
     return out
 
 
@@ -2038,9 +2237,15 @@ def cmd_routes(cfg, args):
     """
     state = load_state(cfg)
     rows = []
+    # 已禁用的 mod 不止从 INDEX.md 消失，它贡献的路由行也必须离开
+    # routing-mods.md —— 否则 AI 会照着路由表选中一个用户明确关掉的后端。
+    # 只加这一条过滤，其余口径保持原样（清单在、状态有就出行）。
+    live = {mid for mid in list_mod_ids() if mod_enabled(state, mid)}
     for mid in list_mod_ids():
         st = state["mods"].get(mid)
         if not st:
+            continue
+        if mid not in live:
             continue
         mod = load_mod(mid) or {}
         for r in mod.get("routes") or []:
@@ -2384,6 +2589,9 @@ USAGE = """sci-figure-kit mod 加载器
   mod.py verify [<id>...] [--write-docs]
   mod.py update [<id>...] [--check] [--yes]    检查/应用 mod 更新
   mod.py remove <id> [--yes] [--purge]
+  mod.py disable <id> [<id>...]     软关闭：从索引与路由表里摘掉，不卸载
+  mod.py enable <id> [<id>...]      重新打开
+  mod.py status [--json]            每个 mod 的 装没装 / 开没开
   mod.py routes                     重新生成 references/routing-mods.md
   mod.py index                      重新生成 mods/INDEX.md（装/卸后自动）
   mod.py pack                       打包 share zip（默认 <skill>/dist/）
@@ -2454,6 +2662,12 @@ def main():
         if cmd == "remove":
             return cmd_remove(cfg, rest, assume_yes="--yes" in flags,
                               purge="--purge" in flags)
+        if cmd == "disable":
+            return cmd_disable(cfg, rest)
+        if cmd == "enable":
+            return cmd_enable(cfg, rest)
+        if cmd == "status":
+            return cmd_status(cfg, rest, as_json="--json" in flags)
         if cmd == "routes":
             return cmd_routes(cfg, rest)
         if cmd == "index":

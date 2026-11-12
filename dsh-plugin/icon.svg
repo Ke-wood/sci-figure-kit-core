@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Scientific Figure Kit">
+  <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 3.5v17h16.5"/>
+    <path d="M7.5 17.5v-4.2"/>
+    <path d="M11 17.5V8.8"/>
+    <path d="M14.5 17.5v-6.4"/>
+    <path d="M18 17.5V6"/>
+  </g>
+  <circle cx="11" cy="6.4" r="1.5" fill="currentColor"/>
+</svg>

@@ -1,5 +1,13 @@
 # Changelog
 
+## 未发布
+
+- **mod 软开关**：新增 `mod.py disable / enable / status [--json]`。
+  `disable` 只把 `_state.json` 里的 `enabled` 写成 `false`，**不 `pip uninstall`、
+  不删任何文件**；该 mod 随即从 `mods/INDEX.md` 与 `references/routing-mods.md`
+  消失，`enable` 立刻恢复。`enabled` 缺省为 `true`，现有 `_state.json`
+  无需迁移即可照常工作。硬卸载 `remove` 行为不变。
+
 ## 0.2.0
 
 下载路径全部可配，仓库自身自包含。

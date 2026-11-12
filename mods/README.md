@@ -33,6 +33,27 @@ cat mods/INDEX.md
 
 `remove` 也会刷新。手动重建：`python scripts/mod.py index`。
 
+### 临时关掉一个 mod：`disable` / `enable`
+
+装了很多 mod 时，某个包会和别的抢配色、抢路由，或者你只是暂时不想让它出现。
+这时**不要 `remove`** —— 那是硬卸载（`pip uninstall` + 删 vendor 目录）。
+用软开关：
+
+```bash
+python scripts/mod.py disable pydeseq2        # 从 INDEX.md 与 routing-mods.md 里消失
+python scripts/mod.py enable  pydeseq2        # 原样回来
+python scripts/mod.py status                  # 每个 mod 装没装 / 开没开
+python scripts/mod.py status --json           # 给脚本用
+```
+
+`disable` **只改 `_state.json` 里的 `enabled` 字段**：清单、`docs.md`、templates
+和已装好的包都原地不动，所以 `enable` 是瞬间的、不需要重装。
+
+- `enabled` 缺省 = **true**。老的状态文件里没有这个字段，读出来一律按启用处理。
+- 禁用后该 mod 的 `mods/<id>/docs.md` **仍然可读**（文档不删），只是不再进索引与路由表。
+- `list` 会把它标成 `已装载·禁用`，避免「怎么 INDEX.md 里没有它」被误判成坏掉。
+
+
 ## 写一个新 mod
 
 `_template/` 是骨架，最小集合是 `mod.json` + `docs.md`：

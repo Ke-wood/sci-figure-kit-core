@@ -1,0 +1,3 @@
+- insert:
+    - id: sci-figure
+      name: '@local/dsh-sci-figure'

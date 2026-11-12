@@ -27,6 +27,41 @@ function firstExisting(candidates) {
   return null
 }
 
+/**
+ * A candidate is only usable if it actually carries mod data.
+ *
+ * Why this exists: the sibling checkout (`../sci-figure-kit-core`) is a SOURCE
+ * repo whose `mods/` holds just `_template` — no `_catalog.json`, no manifests.
+ * It still has `scripts/`, so a naive "does scripts/ exist" check picks it and
+ * every panel install then dies with "没有这个 mod". The installed skill, which
+ * does have the real mods, sits later in the list and never gets a chance.
+ *
+ * So rank candidates: one with a mods/_catalog.json or any manifest wins;
+ * scripts-only remains a last resort (enough for env checks and workbench).
+ */
+function hasModData(dir) {
+  if (!dir) return false
+  const modsDir = join(dir, 'mods')
+  if (!existsSync(modsDir)) return false
+  if (existsSync(join(modsDir, '_catalog.json'))) return true
+  try {
+    for (const name of readdirSync(modsDir)) {
+      if (name.startsWith('_') || name.startsWith('.')) continue
+      if (existsSync(join(modsDir, name, 'mod.json'))) return true
+    }
+  } catch {
+    return false
+  }
+  return false
+}
+
+function pickKit(candidates) {
+  const usable = candidates.filter((d) => d && existsSync(join(d, 'scripts')))
+  if (usable.length === 0) return null
+  const withMods = usable.find((d) => hasModData(d))
+  return withMods || usable[0]
+}
+
 function resolveKit() {
   // import.meta.url is the profile's linked copy, so walk up from the REAL
   // file location only as a hint; the env var stays authoritative.
@@ -37,12 +72,14 @@ function resolveKit() {
     here = ''
   }
   const home = process.env.USERPROFILE || process.env.HOME || ''
-  const found = firstExisting([
+  // 注意：用户已安装的技能目录**排在兄弟 checkout 之前**。兄弟 checkout 是
+  // 源码仓库，它的 mods/ 只有 _template，拿它跑 install 会全失败。
+  const found = pickKit([
     process.env.SCI_FIG_KIT,
-    here ? resolve(here, '..') : '',
-    here ? resolve(here, '..', 'sci-figure-kit-core') : '',
     home ? join(home, '.dsh', 'skills', 'sci-figure-kit') : '',
     home ? join(home, '.claude', 'skills', 'sci-figure-kit') : '',
+    here ? resolve(here, '..', 'sci-figure-kit-core') : '',
+    here ? resolve(here, '..') : '',
   ])
   if (found === null) {
     throw new Error('找不到 sci-figure-kit 技能目录；设 SCI_FIG_KIT 指向含 SKILL.md 的目录。')

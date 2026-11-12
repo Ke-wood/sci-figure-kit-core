@@ -53,6 +53,12 @@ window.__ModuleLoader__.load({
         colDisabled: '停用',
         colInstalled: '已装载',
         noLicenseNote: '无 license 的 mod 只能本机自用，不要随包分发。',
+        needManifest: '缺清单，不能直接装',
+        needManifestHint: '这个 mod 只在目录里登记过来源，还没有 mod.json。先在终端跑 mod.py add <仓库地址> 生成清单，再回来装。',
+        installSlow: '安装可能要几分钟到十几分钟（R 包需编译），期间别关页面',
+        installElapsed: '已用时',
+        installFailed: '安装失败',
+        retry: '重试',
         srcLocal: '本机自写',
         srcGithub: 'GitHub',
         modsFrom: '来自 mods/_catalog.json 与 mod.py status',
@@ -110,6 +116,12 @@ window.__ModuleLoader__.load({
         colDisabled: 'Off',
         colInstalled: 'Installed',
         noLicenseNote: 'Mods without a license are for local use only — do not redistribute.',
+        needManifest: 'no manifest yet',
+        needManifestHint: 'This mod is only registered in the catalog and has no mod.json. Run mod.py add <repo-url> first, then come back to install.',
+        installSlow: 'Installing can take minutes (R packages compile) — keep this page open',
+        installElapsed: 'elapsed',
+        installFailed: 'Install failed',
+        retry: 'Retry',
         srcLocal: 'local',
         srcGithub: 'GitHub',
         modsFrom: 'from mods/_catalog.json and mod.py status',
@@ -940,12 +952,20 @@ window.__ModuleLoader__.load({
               : null,
             h('div', { style: S.actions },
               item.installed ? toggle(item) : null,
+              // 只有「有清单」的才算可装。仅候选（has_manifest=false）没有
+              // mod.json，mod.py install 会直接报「没有这个 mod」，所以按钮
+              // 置灰并说明原因 —— 之前这里是个能点但必然失败的按钮。
               !item.installed
-                ? h('button', {
-                  type: 'button', disabled: Boolean(pending),
-                  onClick: () => runModOp(item.id, 'install'),
-                  style: Object.assign({}, S.btn, { opacity: pending ? 0.55 : 1 }),
-                }, installing ? t('installing') : t('btnInstall'))
+                ? (item.has_manifest
+                  ? h('button', {
+                    type: 'button', disabled: Boolean(pending),
+                    onClick: () => runModOp(item.id, 'install'),
+                    style: Object.assign({}, S.btn, { opacity: pending ? 0.55 : 1 }),
+                  }, installing ? t('installing') : t('btnInstall'))
+                  : h('span', {
+                    style: Object.assign({}, S.chip, { opacity: 0.75 }),
+                    title: t('needManifestHint'),
+                  }, t('needManifest')))
                 : null,
               // 彻底卸载：危险操作，先出内联确认条，绝不用 window.confirm
               item.installed
@@ -955,6 +975,10 @@ window.__ModuleLoader__.load({
                   style: Object.assign({}, S.btn, { color: '#e03131', borderColor: '#e03131', opacity: pending ? 0.55 : 1 }),
                 }, removing ? t('removing') : t('btnRemove'))
                 : null),
+            // 安装慢，给个"别以为卡住了"的提示
+            installing
+              ? h('div', { style: { fontSize: 11, color: '#e8590c' } }, t('installSlow'))
+              : null,
             confirming === item.id
               ? h('div', {
                 style: {
